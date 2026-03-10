@@ -12,12 +12,17 @@ import (
 
 // Subscriber mirrors the `subscribers` table in Supabase.
 type Subscriber struct {
-	ID               string          `json:"id"`
-	TelegramUsername string          `json:"telegram_username"`
-	ChatID           int64           `json:"chat_id"`
-	Symbols          []string        `json:"symbols"`
-	Rules            json.RawMessage `json:"rules"`
-	Active           bool            `json:"active"`
+	ID                   string          `json:"id"`
+	TelegramUsername     string          `json:"telegram_username"`
+	ChatID               int64           `json:"chat_id"`
+	Symbols              []string        `json:"symbols"`
+	Rules                json.RawMessage `json:"rules"`
+	Active               bool            `json:"active"`
+	Tier                 string          `json:"tier"`
+	StripeCustomerID     string          `json:"stripe_customer_id"`
+	StripeSubscriptionID string          `json:"stripe_subscription_id"`
+	SubscriptionStatus   string          `json:"subscription_status"`
+	ProSince             *time.Time      `json:"pro_since"`
 }
 
 // subscriberInsert is the insert-only shape — omits id and active so Supabase
@@ -64,7 +69,7 @@ func New(baseURL, serviceKey string) *Client {
 // GetActiveSubscribers returns all rows from `subscribers` where active=true.
 // GET {baseURL}/rest/v1/subscribers?active=eq.true&select=*
 func (c *Client) GetActiveSubscribers(ctx context.Context) ([]Subscriber, error) {
-	url := c.baseURL + "/rest/v1/subscribers?active=eq.true&select=*"
+	url := c.baseURL + "/rest/v1/subscribers?active=eq.true&select=id,telegram_username,chat_id,symbols,rules,active,tier,stripe_customer_id,stripe_subscription_id,subscription_status,pro_since"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("supabase: build request: %w", err)
@@ -170,6 +175,121 @@ func (c *Client) DeleteSubscriber(ctx context.Context, username string) error {
 		return fmt.Errorf("supabase: DeleteSubscriber: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// UpdateSubscriberTier updates tier and Stripe fields for a subscriber by telegram_username.
+func (c *Client) UpdateSubscriberTier(ctx context.Context, telegramUsername, tier, customerID, subscriptionID, status string) error {
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, telegramUsername)
+	body := map[string]any{"subscription_status": status}
+	if tier != "" {
+		body["tier"] = tier
+	}
+	if customerID != "" {
+		body["stripe_customer_id"] = customerID
+	}
+	if subscriptionID != "" {
+		body["stripe_subscription_id"] = subscriptionID
+	}
+	if tier == "pro" && status == "active" {
+		body["pro_since"] = time.Now().UTC().Format(time.RFC3339)
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: UpdateSubscriberTier: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("supabase: UpdateSubscriberTier: status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// UpdateSubscriberTierByStripeID updates tier/status for a subscriber found by stripe_customer_id or stripe_subscription_id.
+func (c *Client) UpdateSubscriberTierByStripeID(ctx context.Context, customerID, subscriptionID, tier, status string) error {
+	var url string
+	if customerID != "" {
+		url = fmt.Sprintf("%s/rest/v1/subscribers?stripe_customer_id=eq.%s&select=telegram_username", c.baseURL, customerID)
+	} else if subscriptionID != "" {
+		url = fmt.Sprintf("%s/rest/v1/subscribers?stripe_subscription_id=eq.%s&select=telegram_username", c.baseURL, subscriptionID)
+	} else {
+		return fmt.Errorf("supabase: need customer_id or subscription_id")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: GetByStripeID: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("supabase: GetByStripeID: status %d", resp.StatusCode)
+	}
+
+	var subs []struct {
+		TelegramUsername string `json:"telegram_username"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&subs); err != nil || len(subs) == 0 {
+		return fmt.Errorf("supabase: no subscriber found for stripe id")
+	}
+
+	return c.UpdateSubscriberTier(ctx, subs[0].TelegramUsername, tier, customerID, subscriptionID, status)
+}
+
+// GetSubscriberTier returns the tier and status for a username.
+func (c *Client) GetSubscriberTier(ctx context.Context, telegramUsername string) (tier, status string, err error) {
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=tier,subscription_status", c.baseURL, telegramUsername)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("supabase: GetSubscriberTier: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("supabase: GetSubscriberTier: status %d", resp.StatusCode)
+	}
+
+	var subs []struct {
+		Tier               string `json:"tier"`
+		SubscriptionStatus string `json:"subscription_status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&subs); err != nil {
+		return "", "", fmt.Errorf("supabase: GetSubscriberTier decode: %w", err)
+	}
+	if len(subs) == 0 {
+		return "free", "inactive", nil
+	}
+	tier = subs[0].Tier
+	if tier == "" {
+		tier = "free"
+	}
+	status = subs[0].SubscriptionStatus
+	if status == "" {
+		status = "inactive"
+	}
+	return tier, status, nil
 }
 
 // WasAlertSent returns true if alertID was already logged for subscriberID within the last hour.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"derivs-backend/internal/billing"
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/supabase"
 )
@@ -327,6 +329,114 @@ func (h *Handler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unsubscribed"})
+}
+
+// ─── Billing ───────────────────────────────────────────────────────────────────
+
+// CreateCheckout handles POST /api/billing/checkout.
+// Body: {"telegram_username": "johndoe"}
+// Creates Stripe checkout session, returns {"checkout_url": "https://checkout.stripe.com/..."}
+func (h *Handler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		TelegramUsername string `json:"telegram_username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TelegramUsername == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram_username is required"})
+		return
+	}
+
+	if h.billing == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "billing not configured"})
+		return
+	}
+
+	url, err := h.billing.CreateCheckoutSession(req.TelegramUsername)
+	if err != nil {
+		log.Printf("billing: CreateCheckoutSession: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"checkout_url": url})
+}
+
+// StripeWebhook handles POST /api/billing/webhook.
+// Stripe webhook handler — verifies signature, processes events, updates Supabase.
+func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.billing == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	payload, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("billing: webhook read body: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	sigHeader := r.Header.Get("Stripe-Signature")
+	if sigHeader == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	err = h.billing.HandleWebhook(payload, sigHeader, func(u billing.WebhookUpdate) {
+		switch u.EventType {
+		case "checkout.session.completed":
+			if u.TelegramUsername != "" {
+				if err := h.db.UpdateSubscriberTier(ctx, u.TelegramUsername, u.Tier, u.CustomerID, u.SubscriptionID, u.Status); err != nil {
+					log.Printf("billing: UpdateSubscriberTier(%s): %v", u.TelegramUsername, err)
+				}
+			}
+		case "customer.subscription.deleted":
+			if err := h.db.UpdateSubscriberTierByStripeID(ctx, u.CustomerID, u.SubscriptionID, u.Tier, u.Status); err != nil {
+				log.Printf("billing: UpdateSubscriberTierByStripeID: %v", err)
+			}
+		case "customer.subscription.updated":
+			if err := h.db.UpdateSubscriberTierByStripeID(ctx, u.CustomerID, u.SubscriptionID, "", u.Status); err != nil {
+				log.Printf("billing: UpdateSubscriberTierByStripeID: %v", err)
+			}
+		}
+	})
+
+	if err != nil {
+		log.Printf("billing: webhook: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// GetBillingStatus handles GET /api/billing/status?username=johndoe.
+// Returns {"tier": "free"|"pro", "status": "active"|"inactive"}
+func (h *Handler) GetBillingStatus(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
+		return
+	}
+
+	tier, status, err := h.db.GetSubscriberTier(r.Context(), username)
+	if err != nil {
+		log.Printf("billing: GetSubscriberTier(%s): %v", username, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get tier"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"tier": tier, "status": status})
 }
 
 // ─── Telegram webhook ─────────────────────────────────────────────────────────

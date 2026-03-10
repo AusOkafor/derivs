@@ -3,6 +3,7 @@ package handlers
 import (
 	"derivs-backend/internal/aggregator"
 	"derivs-backend/internal/alerts"
+	"derivs-backend/internal/billing"
 	"derivs-backend/internal/analysis"
 	"derivs-backend/internal/cache"
 	"derivs-backend/internal/feargreed"
@@ -18,6 +19,7 @@ type Handler struct {
 	calc       *feargreed.Calculator
 	db         *supabase.Client
 	notifier   *notify.TelegramNotifier
+	billing    *billing.StripeClient
 }
 
 func New(
@@ -28,6 +30,7 @@ func New(
 	calc *feargreed.Calculator,
 	db *supabase.Client,
 	notifier *notify.TelegramNotifier,
+	billingClient *billing.StripeClient,
 ) *Handler {
 	return &Handler{
 		aggregator: agg,
@@ -37,5 +40,6 @@ func New(
 		calc:       calc,
 		db:         db,
 		notifier:   notifier,
+		billing:    billingClient,
 	}
 }

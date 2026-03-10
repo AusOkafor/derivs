@@ -7,24 +7,30 @@ import (
 )
 
 type Config struct {
-	Port               string
-	AnthropicAPIKey    string
-	AllowedOrigins     string
-	CacheTTLSeconds    int
-	TelegramBotToken   string
-	SupabaseURL        string
-	SupabaseServiceKey string
+	Port                 string
+	AnthropicAPIKey      string
+	AllowedOrigins       string
+	CacheTTLSeconds      int
+	TelegramBotToken     string
+	SupabaseURL          string
+	SupabaseServiceKey   string
+	StripeSecretKey      string
+	StripeWebhookSecret  string
+	StripeProPriceID     string
 }
 
 func Load() *Config {
 	cfg := &Config{
-		Port:               getEnvOrDefault("PORT", "8080"),
-		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
+		Port:                getEnvOrDefault("PORT", "8080"),
+		AnthropicAPIKey:     os.Getenv("ANTHROPIC_API_KEY"),
 		AllowedOrigins:     getEnvOrDefault("ALLOWED_ORIGINS", "*"),
 		CacheTTLSeconds:    getEnvAsIntOrDefault("CACHE_TTL_SECONDS", 30),
 		TelegramBotToken:   os.Getenv("TELEGRAM_BOT_TOKEN"),
 		SupabaseURL:        os.Getenv("SUPABASE_URL"),
 		SupabaseServiceKey: os.Getenv("SUPABASE_SERVICE_KEY"),
+		StripeSecretKey:    os.Getenv("STRIPE_SECRET_KEY"),
+		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		StripeProPriceID:   os.Getenv("STRIPE_PRO_PRICE_ID"),
 	}
 
 	required := map[string]string{

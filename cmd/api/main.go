@@ -9,6 +9,7 @@ import (
 	"derivs-backend/internal/aggregator"
 	"derivs-backend/internal/alerts"
 	"derivs-backend/internal/analysis"
+	"derivs-backend/internal/billing"
 	"derivs-backend/internal/cache"
 	"derivs-backend/internal/config"
 	"derivs-backend/internal/feargreed"
@@ -38,7 +39,12 @@ func main() {
 	defer cancel()
 	go wrk.Start(ctx)
 
-	h := handlers.New(agg, az, c, detector, calc, sb, tg)
+	var billingClient *billing.StripeClient
+	if cfg.StripeSecretKey != "" && cfg.StripeProPriceID != "" && cfg.StripeWebhookSecret != "" {
+		billingClient = billing.New(cfg.StripeSecretKey, cfg.StripeProPriceID, cfg.StripeWebhookSecret)
+	}
+
+	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient)
 	hub := handlers.NewHub(h)
 
 	mux := http.NewServeMux()
@@ -49,6 +55,9 @@ func main() {
 	mux.HandleFunc("/api/tickers", h.GetTickers)
 	mux.HandleFunc("/api/subscribe", h.Subscribe)
 	mux.HandleFunc("/api/unsubscribe", h.Unsubscribe)
+	mux.HandleFunc("/api/billing/checkout", h.CreateCheckout)
+	mux.HandleFunc("/api/billing/webhook", h.StripeWebhook)
+	mux.HandleFunc("/api/billing/status", h.GetBillingStatus)
 	mux.HandleFunc("/api/webhook/telegram", h.TelegramWebhook)
 	mux.Handle("/ws", websocket.Handler(hub.ServeWS))
 

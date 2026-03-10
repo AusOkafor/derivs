@@ -38,20 +38,26 @@ func New(
 	}
 }
 
-// Start launches the background goroutine with a 5-minute ticker.
-// Runs one cycle immediately on start, then every 5 minutes.
+// Start launches background goroutines:
+// - Free tier: 5-min ticker, BTC symbols only
+// - Pro tier: 1-min ticker, all subscribed symbols
 // Stops cleanly when ctx is cancelled.
 func (w *Worker) Start(ctx context.Context) {
 	log.Println("worker: started")
-	w.runCycle(ctx)
+	w.runCycleFree(ctx)
+	w.runCyclePro(ctx)
 
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
+	tickerFree := time.NewTicker(5 * time.Minute)
+	tickerPro := time.NewTicker(1 * time.Minute)
+	defer tickerFree.Stop()
+	defer tickerPro.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
-			w.runCycle(ctx)
+		case <-tickerFree.C:
+			w.runCycleFree(ctx)
+		case <-tickerPro.C:
+			w.runCyclePro(ctx)
 		case <-ctx.Done():
 			log.Println("worker: stopped")
 			return
@@ -59,10 +65,29 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 }
 
+// isFreeTier returns true if tier is empty or "free".
+func isFreeTier(tier string) bool {
+	return tier == "" || tier == "free"
+}
+
+// isBTCSymbol returns true for BTC-related symbols (free tier only gets these).
+func isBTCSymbol(symbol string) bool {
+	return strings.EqualFold(symbol, "BTC")
+}
+
+// runCycleFree runs for free-tier subscribers, 5-min interval, BTC symbols only.
+func (w *Worker) runCycleFree(ctx context.Context) {
+	w.runCycle(ctx, true)
+}
+
+// runCyclePro runs for pro-tier subscribers, 1-min interval, all symbols.
+func (w *Worker) runCyclePro(ctx context.Context) {
+	w.runCycle(ctx, false)
+}
+
 // runCycle executes one full notification cycle.
-func (w *Worker) runCycle(ctx context.Context) {
-	// Track alerts sent THIS cycle to prevent duplicates within the same run.
-	// key: "subscriberID:alertID"
+// freeOnly: if true, only free-tier subscribers and BTC symbols; if false, only pro-tier and all symbols.
+func (w *Worker) runCycle(ctx context.Context, freeOnly bool) {
 	sentThisCycle := make(map[string]bool)
 
 	subscribers, err := w.db.GetActiveSubscribers(ctx)
@@ -70,19 +95,34 @@ func (w *Worker) runCycle(ctx context.Context) {
 		log.Printf("worker: GetActiveSubscribers: %v", err)
 		return
 	}
+
+	// Filter by tier.
+	var filtered []supabase.Subscriber
+	for _, sub := range subscribers {
+		if freeOnly && !isFreeTier(sub.Tier) {
+			continue
+		}
+		if !freeOnly && isFreeTier(sub.Tier) {
+			continue
+		}
+		filtered = append(filtered, sub)
+	}
+	subscribers = filtered
 	if len(subscribers) == 0 {
 		return
 	}
 
-	// Collect all unique symbols needed across all subscribers.
+	// Collect symbols; for free tier only BTC.
 	symbolSet := make(map[string]struct{})
 	for _, sub := range subscribers {
 		for _, sym := range sub.Symbols {
+			if freeOnly && !isBTCSymbol(sym) {
+				continue
+			}
 			symbolSet[sym] = struct{}{}
 		}
 	}
 
-	// Fetch snapshots and detect alerts for each unique symbol.
 	type symbolAlerts struct {
 		detected []models.Alert
 	}
@@ -99,14 +139,15 @@ func (w *Worker) runCycle(ctx context.Context) {
 		}
 	}
 
-	// Dispatch alerts to each subscriber.
 	for _, sub := range subscribers {
 		if sub.ChatID == 0 {
-			// No chat ID yet — subscriber hasn't started the bot.
 			continue
 		}
 
 		for _, sym := range sub.Symbols {
+			if freeOnly && !isBTCSymbol(sym) {
+				continue
+			}
 			sa, ok := snapshots[sym]
 			if !ok {
 				continue
