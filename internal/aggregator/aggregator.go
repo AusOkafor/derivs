@@ -425,27 +425,29 @@ func (a *Aggregator) fetchOKXLongShort(ctx context.Context, symbol string) (mode
 	if err := a.publicGet(ctx, u, &raw); err != nil {
 		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: %w", err)
 	}
-	// Each inner array is: [timestamp, longRatio, shortRatio]
-	// e.g. [["1234567890000", "0.5972", "0.4028"]]
-	if len(raw.Data) == 0 || len(raw.Data[0]) < 3 {
+	if len(raw.Data) == 0 {
 		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: no data for %s", symbol)
 	}
 
 	item := raw.Data[0]
-	ts, _ := strconv.ParseInt(item[0], 10, 64)
-	longPct, _ := strconv.ParseFloat(item[1], 64)
-	shortPct, _ := strconv.ParseFloat(item[2], 64)
-
-	ratio := longPct / shortPct
-	if shortPct == 0 {
-		ratio = 0
+	if len(item) < 2 {
+		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: unexpected format for %s", symbol)
 	}
+
+	ts, _ := strconv.ParseInt(item[0], 10, 64)
+	ratio, _ := strconv.ParseFloat(item[1], 64)
+
+	// Derive longPct and shortPct from ratio
+	// ratio = longs/shorts, and longPct + shortPct = 100
+	// longPct = ratio / (1 + ratio) * 100
+	longPct := ratio / (1+ratio) * 100
+	shortPct := 100 - longPct
 
 	return models.LongShortRatio{
 		Symbol:    symbol,
 		Exchange:  "OKX",
-		LongPct:   longPct * 100,
-		ShortPct:  shortPct * 100,
+		LongPct:   longPct,
+		ShortPct:  shortPct,
 		Ratio:     ratio,
 		Timestamp: time.UnixMilli(ts).UTC(),
 	}, nil
