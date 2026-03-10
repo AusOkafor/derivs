@@ -32,6 +32,9 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cached, ok := h.cache.Get(symbol); ok {
+		if cached.Snapshot.Symbol != symbol {
+			log.Printf("GetSnapshot: cache symbol mismatch: requested %s, got %s", symbol, cached.Snapshot.Symbol)
+		}
 		w.Header().Set("X-Cache", "HIT")
 		writeJSON(w, http.StatusOK, cached)
 		return
@@ -43,6 +46,9 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if snap.Symbol != symbol {
+		log.Printf("GetSnapshot: snapshot symbol mismatch: requested %s, got %s", symbol, snap.Symbol)
 	}
 
 	// Analyze always returns a usable value (fallback on error); discard the error

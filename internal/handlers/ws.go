@@ -28,15 +28,22 @@ func NewHub(h *Handler) *Hub {
 }
 
 // getOrFetch checks the cache and falls back to a live fetch + analysis if
-// the entry is missing or expired.
+// the entry is missing or expired. Uses symbol for fetch/cache; snapshot and
+// analysis are built from that fetch — no cross-symbol reuse.
 func (hub *Hub) getOrFetch(ctx context.Context, symbol string) (models.SnapshotWithAnalysis, error) {
 	if cached, ok := hub.handler.cache.Get(symbol); ok {
+		if cached.Snapshot.Symbol != symbol {
+			log.Printf("ws: cache symbol mismatch: requested %s, got %s", symbol, cached.Snapshot.Symbol)
+		}
 		return cached, nil
 	}
 
 	snap, err := hub.handler.aggregator.FetchSnapshot(ctx, symbol)
 	if err != nil {
 		return models.SnapshotWithAnalysis{}, err
+	}
+	if snap.Symbol != symbol {
+		log.Printf("ws: snapshot symbol mismatch: requested %s, got %s", symbol, snap.Symbol)
 	}
 
 	ai, _ := hub.handler.analyzer.Analyze(ctx, snap)

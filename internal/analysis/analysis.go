@@ -146,6 +146,11 @@ func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot) (mod
 	}
 
 	prompt := buildPrompt(snap)
+	promptPreview := prompt
+	if len(promptPreview) > 200 {
+		promptPreview = promptPreview[:200]
+	}
+	log.Printf("analysis: generating for %s, prompt[:200]: %s", snap.Symbol, promptPreview)
 
 	reqBody := anthropicRequest{
 		Model:     "claude-haiku-4-5-20251001",
