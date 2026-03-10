@@ -10,6 +10,7 @@ import (
 
 	"derivs-backend/internal/aggregator"
 	"derivs-backend/internal/alerts"
+	"derivs-backend/internal/feargreed"
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/notify"
 	"derivs-backend/internal/supabase"
@@ -22,6 +23,7 @@ type Worker struct {
 	detector   *alerts.Detector
 	notifier   *notify.TelegramNotifier
 	db         *supabase.Client
+	calc       *feargreed.Calculator
 }
 
 func New(
@@ -29,22 +31,50 @@ func New(
 	det *alerts.Detector,
 	not *notify.TelegramNotifier,
 	db *supabase.Client,
+	calc *feargreed.Calculator,
 ) *Worker {
 	return &Worker{
 		aggregator: agg,
 		detector:   det,
 		notifier:   not,
 		db:         db,
+		calc:       calc,
 	}
+}
+
+// scheduleDaily runs fn at target hour:minute UTC, then every 24h.
+func scheduleDaily(target time.Time, fn func()) {
+	now := time.Now().UTC()
+	next := time.Date(now.Year(), now.Month(), now.Day(),
+		target.Hour(), target.Minute(), 0, 0, time.UTC)
+	if now.After(next) || now.Equal(next) {
+		next = next.Add(24 * time.Hour)
+	}
+	delay := next.Sub(now)
+	log.Printf("worker: morning brief scheduled in %v", delay)
+	time.AfterFunc(delay, func() {
+		fn()
+		ticker := time.NewTicker(24 * time.Hour)
+		go func() {
+			for range ticker.C {
+				fn()
+			}
+		}()
+	})
 }
 
 // Start launches background goroutines:
 // - Free tier: 5-min ticker, BTC symbols only
 // - Pro tier: 1-min ticker, all subscribed symbols
+// - Morning brief: 08:00 UTC daily
 // Stops cleanly when ctx is cancelled.
 func (w *Worker) Start(ctx context.Context) {
 	log.Println("worker: starting free cycle (5min)")
 	log.Println("worker: starting pro cycle (1min)")
+
+	scheduleDaily(time.Date(0, 1, 1, 8, 0, 0, 0, time.UTC), func() {
+		go w.SendMorningBrief(context.Background())
+	})
 
 	freeTicker := time.NewTicker(5 * time.Minute)
 	proTicker := time.NewTicker(1 * time.Minute)
@@ -165,6 +195,9 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 
 			for _, alert := range sa.detected {
 				if !w.shouldSendAlert(sub.Rules, alert) {
+					if !freeOnly {
+						log.Printf("worker: pro cycle skipping %s (rules filter)", alert.ID)
+					}
 					continue
 				}
 
@@ -179,6 +212,9 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 					continue
 				}
 				if alreadySent {
+					if !freeOnly {
+						log.Printf("worker: pro cycle skipping %s (dedup: already sent within 1h)", alert.ID)
+					}
 					continue
 				}
 

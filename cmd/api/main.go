@@ -33,7 +33,7 @@ func main() {
 
 	tg := notify.NewTelegram(cfg.TelegramBotToken)
 	sb := supabase.New(cfg.SupabaseURL, cfg.SupabaseServiceKey)
-	wrk := worker.New(agg, detector, tg, sb)
+	wrk := worker.New(agg, detector, tg, sb, calc)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -58,6 +58,16 @@ func main() {
 	mux.HandleFunc("/api/billing/checkout", h.CreateCheckout)
 	mux.HandleFunc("/api/billing/webhook", h.StripeWebhook)
 	mux.HandleFunc("/api/billing/status", h.GetBillingStatus)
+	mux.HandleFunc("/api/debug/brief", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		go wrk.SendMorningBrief(context.Background())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"brief sending"}`))
+	})
 	mux.HandleFunc("/api/webhook/telegram", h.TelegramWebhook)
 	mux.Handle("/ws", websocket.Handler(hub.ServeWS))
 
