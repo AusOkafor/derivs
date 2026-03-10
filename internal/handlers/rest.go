@@ -191,41 +191,60 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TelegramUser.ID == 0 || req.TelegramUser.Hash == "" || len(req.Symbols) == 0 {
+	if req.TelegramUser.Hash == "" || len(req.Symbols) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram_user and symbols are required"})
-		return
-	}
-
-	// Build data map for hash verification (all fields except hash, as strings)
-	data := map[string]string{
-		"auth_date":  strconv.FormatInt(req.TelegramUser.AuthDate, 10),
-		"first_name": req.TelegramUser.FirstName,
-		"hash":       req.TelegramUser.Hash,
-		"id":         strconv.FormatInt(req.TelegramUser.ID, 10),
-	}
-	if req.TelegramUser.Username != "" {
-		data["username"] = req.TelegramUser.Username
-	}
-	if req.TelegramUser.PhotoURL != "" {
-		data["photo_url"] = req.TelegramUser.PhotoURL
-	}
-
-	if !h.notifier.VerifyAuth(data) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid telegram auth"})
 		return
 	}
 
 	ctx := r.Context()
 
-	// Use username from Telegram, or fallback to user_<id> for deduplication
+	isManual := req.TelegramUser.Hash == "manual"
+
+	if !isManual {
+		if req.TelegramUser.ID == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram_user and symbols are required"})
+			return
+		}
+		// Build data map for hash verification (all fields except hash, as strings)
+		data := map[string]string{
+			"auth_date":  strconv.FormatInt(req.TelegramUser.AuthDate, 10),
+			"first_name": req.TelegramUser.FirstName,
+			"hash":       req.TelegramUser.Hash,
+			"id":         strconv.FormatInt(req.TelegramUser.ID, 10),
+		}
+		if req.TelegramUser.Username != "" {
+			data["username"] = req.TelegramUser.Username
+		}
+		if req.TelegramUser.PhotoURL != "" {
+			data["photo_url"] = req.TelegramUser.PhotoURL
+		}
+		if !h.notifier.VerifyAuth(data) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid telegram auth"})
+			return
+		}
+	}
+
+	// Use username from Telegram; for manual, FirstName holds the entered username
 	telegramUsername := req.TelegramUser.Username
 	if telegramUsername == "" {
+		telegramUsername = req.TelegramUser.FirstName
+	}
+	if telegramUsername == "" && !isManual {
 		telegramUsername = "user_" + strconv.FormatInt(req.TelegramUser.ID, 10)
+	}
+	if telegramUsername == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram username is required"})
+		return
+	}
+
+	chatID := req.TelegramUser.ID
+	if isManual {
+		chatID = 0 // rely on /start webhook to populate later
 	}
 
 	sub := supabase.Subscriber{
 		TelegramUsername: telegramUsername,
-		ChatID:           req.TelegramUser.ID, // real ID from widget — no webhook needed
+		ChatID:           chatID,
 		Symbols:          req.Symbols,
 		Rules:            req.Rules,
 		Active:           true,
@@ -241,7 +260,16 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send welcome message immediately
+	if isManual {
+		// Manual signup: no chat_id yet — user must send /start to bot
+		writeJSON(w, http.StatusCreated, map[string]string{
+			"status":  "pending",
+			"message": fmt.Sprintf("Almost done! Send /start to @derivlens_alerts_bot to activate your alerts, %s.", req.TelegramUser.FirstName),
+		})
+		return
+	}
+
+	// Widget signup: send welcome message immediately
 	welcomeMsg := fmt.Sprintf(
 		"✅ <b>DerivLens Alerts Activated!</b>\nHello %s! You'll receive alerts for: %s\nPowered by DerivLens 🚀",
 		req.TelegramUser.FirstName,
