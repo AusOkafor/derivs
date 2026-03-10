@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,10 +29,15 @@ func New(ttlSeconds int) *Cache {
 	return c
 }
 
+func cacheKey(symbol string) string {
+	return fmt.Sprintf("snapshot:%s", strings.ToUpper(symbol))
+}
+
 func (c *Cache) Set(symbol string, data models.SnapshotWithAnalysis) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.store[symbol] = entry{
+	key := cacheKey(symbol)
+	c.store[key] = entry{
 		data:      data,
 		expiresAt: time.Now().Add(c.ttl),
 	}
@@ -39,7 +46,8 @@ func (c *Cache) Set(symbol string, data models.SnapshotWithAnalysis) {
 func (c *Cache) Get(symbol string) (models.SnapshotWithAnalysis, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	e, ok := c.store[symbol]
+	key := cacheKey(symbol)
+	e, ok := c.store[key]
 	if !ok || time.Now().After(e.expiresAt) {
 		return models.SnapshotWithAnalysis{}, false
 	}
