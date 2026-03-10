@@ -9,10 +9,28 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"derivs-backend/internal/models"
 )
+
+var (
+	aiEnabled = true
+	aiMu     sync.Mutex
+)
+
+func SetAIEnabled(enabled bool) {
+	aiMu.Lock()
+	defer aiMu.Unlock()
+	aiEnabled = enabled
+}
+
+func IsAIEnabled() bool {
+	aiMu.Lock()
+	defer aiMu.Unlock()
+	return aiEnabled
+}
 
 type Analyzer struct {
 	apiKey     string
@@ -138,6 +156,16 @@ Respond ONLY with a valid JSON object, no markdown, no explanation:
 // ─── Public ───────────────────────────────────────────────────────────────────
 
 func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot) (models.AIAnalysis, error) {
+	if !IsAIEnabled() {
+		return models.AIAnalysis{
+			Symbol:      snap.Symbol,
+			Summary:     "AI analysis is currently paused.",
+			Sentiment:   "neutral",
+			Confidence:  0,
+			GeneratedAt: time.Now().UTC(),
+		}, nil
+	}
+
 	select {
 	case a.sem <- struct{}{}:
 		defer func() { <-a.sem }()

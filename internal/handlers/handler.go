@@ -12,14 +12,15 @@ import (
 )
 
 type Handler struct {
-	aggregator *aggregator.Aggregator
-	analyzer   *analysis.Analyzer
-	cache      *cache.Cache
-	detector   *alerts.Detector
-	calc       *feargreed.Calculator
-	db         *supabase.Client
-	notifier   *notify.TelegramNotifier
-	billing    *billing.StripeClient
+	aggregator  *aggregator.Aggregator
+	analyzer    *analysis.Analyzer
+	cache       *cache.Cache
+	detector    *alerts.Detector
+	calc        *feargreed.Calculator
+	db          *supabase.Client
+	notifier    *notify.TelegramNotifier
+	billing     *billing.StripeClient
+	adminSecret string
 }
 
 func New(
@@ -31,15 +32,17 @@ func New(
 	db *supabase.Client,
 	notifier *notify.TelegramNotifier,
 	billingClient *billing.StripeClient,
+	adminSecret string,
 ) *Handler {
 	return &Handler{
-		aggregator: agg,
-		analyzer:   az,
-		cache:      c,
-		detector:   det,
-		calc:       calc,
-		db:         db,
-		notifier:   notifier,
-		billing:    billingClient,
+		aggregator:  agg,
+		analyzer:    az,
+		cache:       c,
+		detector:    det,
+		calc:        calc,
+		db:          db,
+		notifier:    notifier,
+		billing:     billingClient,
+		adminSecret: adminSecret,
 	}
 }

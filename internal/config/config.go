@@ -17,6 +17,7 @@ type Config struct {
 	StripeSecretKey      string
 	StripeWebhookSecret  string
 	StripeProPriceID     string
+	AdminSecret          string
 }
 
 func Load() *Config {
@@ -31,6 +32,7 @@ func Load() *Config {
 		StripeSecretKey:    os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
 		StripeProPriceID:   os.Getenv("STRIPE_PRO_PRICE_ID"),
+		AdminSecret:       os.Getenv("ADMIN_SECRET"),
 	}
 
 	required := map[string]string{

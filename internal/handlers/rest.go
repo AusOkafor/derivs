@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"derivs-backend/internal/analysis"
 	"derivs-backend/internal/billing"
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/supabase"
@@ -528,4 +529,57 @@ func (h *Handler) TelegramWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// ─── Admin AI toggle ─────────────────────────────────────────────────────────
+
+func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if h.adminSecret == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "admin not configured"})
+		return false
+	}
+	key := r.Header.Get("X-Admin-Key")
+	if key != h.adminSecret {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return false
+	}
+	return true
+}
+
+// PauseAI handles POST /api/admin/ai/pause — disables AI analysis.
+func (h *Handler) PauseAI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	analysis.SetAIEnabled(false)
+	writeJSON(w, http.StatusOK, map[string]bool{"ai_enabled": false})
+}
+
+// ResumeAI handles POST /api/admin/ai/resume — enables AI analysis.
+func (h *Handler) ResumeAI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	analysis.SetAIEnabled(true)
+	writeJSON(w, http.StatusOK, map[string]bool{"ai_enabled": true})
+}
+
+// AIStatus handles GET /api/admin/ai/status — returns {"ai_enabled": true/false}.
+func (h *Handler) AIStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ai_enabled": analysis.IsAIEnabled()})
 }

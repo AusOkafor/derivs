@@ -44,7 +44,7 @@ func main() {
 		billingClient = billing.New(cfg.StripeSecretKey, cfg.StripeProPriceID, cfg.StripeWebhookSecret)
 	}
 
-	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient)
+	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, cfg.AdminSecret)
 	hub := handlers.NewHub(h)
 
 	mux := http.NewServeMux()
@@ -60,6 +60,9 @@ func main() {
 	mux.HandleFunc("/api/billing/webhook", h.StripeWebhook)
 	mux.HandleFunc("/api/billing/status", h.GetBillingStatus)
 	mux.HandleFunc("/api/webhook/telegram", h.TelegramWebhook)
+	mux.HandleFunc("/api/admin/ai/pause", h.PauseAI)
+	mux.HandleFunc("/api/admin/ai/resume", h.ResumeAI)
+	mux.HandleFunc("/api/admin/ai/status", h.AIStatus)
 	mux.Handle("/ws", websocket.Handler(hub.ServeWS))
 
 	log.Printf("derivlens: listening on %s", cfg.Addr())
@@ -72,7 +75,7 @@ func corsMiddleware(allowedOrigins string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigins)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Key")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
