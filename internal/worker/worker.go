@@ -43,23 +43,28 @@ func New(
 // - Pro tier: 1-min ticker, all subscribed symbols
 // Stops cleanly when ctx is cancelled.
 func (w *Worker) Start(ctx context.Context) {
-	log.Println("worker: started")
-	w.runCycleFree(ctx)
-	w.runCyclePro(ctx)
+	log.Println("worker: starting free cycle (5min)")
+	log.Println("worker: starting pro cycle (1min)")
 
-	tickerFree := time.NewTicker(5 * time.Minute)
-	tickerPro := time.NewTicker(1 * time.Minute)
-	defer tickerFree.Stop()
-	defer tickerPro.Stop()
+	freeTicker := time.NewTicker(5 * time.Minute)
+	proTicker := time.NewTicker(1 * time.Minute)
+
+	// Run both immediately on start
+	go w.runCycleFree(ctx)
+	go w.runCyclePro(ctx)
 
 	for {
 		select {
-		case <-tickerFree.C:
-			w.runCycleFree(ctx)
-		case <-tickerPro.C:
-			w.runCyclePro(ctx)
+		case <-freeTicker.C:
+			log.Println("worker: free cycle tick")
+			go w.runCycleFree(ctx)
+		case <-proTicker.C:
+			log.Println("worker: pro cycle tick")
+			go w.runCyclePro(ctx)
 		case <-ctx.Done():
-			log.Println("worker: stopped")
+			log.Println("worker: shutting down")
+			freeTicker.Stop()
+			proTicker.Stop()
 			return
 		}
 	}
@@ -82,18 +87,21 @@ func (w *Worker) runCycleFree(ctx context.Context) {
 
 // runCyclePro runs for pro-tier subscribers, 1-min interval, all symbols.
 func (w *Worker) runCyclePro(ctx context.Context) {
-	w.runCycle(ctx, false)
+	log.Println("worker: pro cycle starting")
+	n := w.runCycle(ctx, false)
+	log.Printf("worker: pro cycle found %d pro subscribers", n)
 }
 
 // runCycle executes one full notification cycle.
 // freeOnly: if true, only free-tier subscribers and BTC symbols; if false, only pro-tier and all symbols.
-func (w *Worker) runCycle(ctx context.Context, freeOnly bool) {
+// Returns the count of filtered subscribers for logging.
+func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 	sentThisCycle := make(map[string]bool)
 
 	subscribers, err := w.db.GetActiveSubscribers(ctx)
 	if err != nil {
 		log.Printf("worker: GetActiveSubscribers: %v", err)
-		return
+		return 0
 	}
 
 	// Filter by tier.
@@ -109,7 +117,7 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) {
 	}
 	subscribers = filtered
 	if len(subscribers) == 0 {
-		return
+		return 0
 	}
 
 	// Collect symbols; for free tier only BTC.
@@ -186,6 +194,7 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) {
 			}
 		}
 	}
+	return len(subscribers)
 }
 
 // shouldSendAlert checks whether a subscriber's rules JSONB permits a given alert.
