@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"derivs-backend/internal/models"
 )
 
 // Subscriber mirrors the `subscribers` table in Supabase.
@@ -355,6 +357,60 @@ func (c *Client) WasAlertSent(ctx context.Context, subscriberID, alertID string)
 		return false, fmt.Errorf("supabase: WasAlertSent decode: %w", err)
 	}
 	return len(rows) > 0, nil
+}
+
+// LogAlertHistory logs every alert that fires (regardless of subscriber dedup).
+// POST {baseURL}/rest/v1/alert_history
+func (c *Client) LogAlertHistory(ctx context.Context, symbol, alertID, message, severity string) error {
+	url := c.baseURL + "/rest/v1/alert_history"
+	body, _ := json.Marshal(map[string]any{
+		"symbol":      symbol,
+		"alert_id":    alertID,
+		"message":    message,
+		"severity":   severity,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: LogAlertHistory: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("supabase: LogAlertHistory: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// GetAlertHistory returns the last N alerts for a symbol (or all symbols if symbol is empty).
+// GET {baseURL}/rest/v1/alert_history?order=triggered_at.desc&limit=N
+func (c *Client) GetAlertHistory(ctx context.Context, symbol string, limit int) ([]models.AlertHistoryEntry, error) {
+	url := fmt.Sprintf("%s/rest/v1/alert_history?order=triggered_at.desc&limit=%d&select=id,symbol,alert_id,message,severity,triggered_at", c.baseURL, limit)
+	if symbol != "" {
+		url += fmt.Sprintf("&symbol=eq.%s", symbol)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetAlertHistory: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetAlertHistory: status %d", resp.StatusCode)
+	}
+	var entries []models.AlertHistoryEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		return nil, fmt.Errorf("supabase: GetAlertHistory decode: %w", err)
+	}
+	return entries, nil
 }
 
 // LogAlert inserts a row into the `alert_log` table.

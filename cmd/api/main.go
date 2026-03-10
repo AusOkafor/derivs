@@ -52,6 +52,7 @@ func main() {
 	mux.HandleFunc("/api/snapshot", h.GetSnapshot)
 	mux.HandleFunc("/api/history", h.GetHistory)
 	mux.HandleFunc("/api/alerts", h.GetAlerts)
+	mux.HandleFunc("/api/alerts/history", h.GetAlertHistory)
 	mux.HandleFunc("/api/tickers", h.GetTickers)
 	mux.HandleFunc("/api/subscribe", h.Subscribe)
 	mux.HandleFunc("/api/unsubscribe", h.Unsubscribe)

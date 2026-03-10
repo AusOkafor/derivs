@@ -177,6 +177,12 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 		if !freeOnly {
 			log.Printf("worker: pro cycle found %d alerts for %s", len(alerts), sym)
 		}
+		// Log every alert that fires to alert_history (regardless of subscriber dedup)
+		for _, alert := range alerts {
+			if err := w.db.LogAlertHistory(ctx, sym, alert.ID, alert.Message, alert.Severity); err != nil {
+				log.Printf("worker: LogAlertHistory(%s): %v", sym, err)
+			}
+		}
 	}
 
 	for _, sub := range subscribers {

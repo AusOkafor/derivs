@@ -120,6 +120,35 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetAlertHistory handles GET /api/alerts/history?symbol=BTC&limit=50
+// symbol is optional — if empty, returns all symbols
+// limit defaults to 50, max 200
+// Returns []AlertHistoryEntry sorted by triggered_at DESC
+func (h *Handler) GetAlertHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	symbol := r.URL.Query().Get("symbol")
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			limit = n
+			if limit > 200 {
+				limit = 200
+			}
+		}
+	}
+	entries, err := h.db.GetAlertHistory(r.Context(), symbol, limit)
+	if err != nil {
+		log.Printf("GetAlertHistory: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get alert history"})
+		return
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
 // GetAlerts handles GET /api/alerts?symbol=BTC
 // Fetches a fresh snapshot and runs alert detection. Does not use the cache
 // so that callers always get current anomaly detection.

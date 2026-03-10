@@ -66,6 +66,15 @@ type Alert struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+type AlertHistoryEntry struct {
+	ID          string    `json:"id"`
+	Symbol      string    `json:"symbol"`
+	AlertID     string    `json:"alert_id"`
+	Message     string    `json:"message"`
+	Severity    string    `json:"severity"`
+	TriggeredAt time.Time `json:"triggered_at"`
+}
+
 type FearGreedScore struct {
 	Symbol     string    `json:"symbol"`
 	Score      int       `json:"score"` // 0-100
