@@ -3,12 +3,47 @@ package alerts
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"derivs-backend/internal/models"
 )
 
 type Detector struct{}
+
+// priceBucket holds aggregated liquidation levels in a price range.
+type priceBucket struct {
+	side     string
+	totalUSD float64
+	minPrice float64
+	maxPrice float64
+	count    int
+}
+
+// groupIntoBuckets groups levels by floor(price/bucketSize)*bucketSize and side.
+// Returns buckets sorted by totalUSD descending.
+func groupIntoBuckets(levels []models.LiquidationLevel, bucketSize float64) []priceBucket {
+	type bucketKey struct {
+		side  string
+		start float64
+	}
+	m := make(map[bucketKey]*priceBucket)
+	for _, lvl := range levels {
+		start := math.Floor(lvl.Price/bucketSize) * bucketSize
+		k := bucketKey{side: lvl.Side, start: start}
+		if m[k] == nil {
+			m[k] = &priceBucket{side: lvl.Side, minPrice: start, maxPrice: start + bucketSize}
+		}
+		m[k].totalUSD += lvl.SizeUsd
+		m[k].count++
+	}
+	var buckets []priceBucket
+	for _, b := range m {
+		buckets = append(buckets, *b)
+	}
+	sort.Slice(buckets, func(i, j int) bool { return buckets[i].totalUSD > buckets[j].totalUSD })
+	return buckets
+}
 
 func New() *Detector { return &Detector{} }
 
@@ -109,6 +144,27 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 			fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure", rate*100),
 			"low",
 		)
+	}
+
+	// ── Rule 8: Whale cluster detected ─────────────────────────────────────────
+	buckets := groupIntoBuckets(snap.LiquidationMap.Levels, 500.0)
+	for _, b := range buckets {
+		if b.totalUSD >= 2_000_000 {
+			severity := "medium"
+			if b.totalUSD >= 5_000_000 {
+				severity = "high"
+			}
+			id := fmt.Sprintf("%s-whale-%s-%.0f", snap.Symbol, b.side, b.minPrice)
+			msg := fmt.Sprintf("🐋 Large %s whale cluster near $%.0f: $%.2fM across %d levels",
+				b.side, b.minPrice, b.totalUSD/1_000_000, b.count)
+			out = append(out, models.Alert{
+				ID:        id,
+				Symbol:    snap.Symbol,
+				Message:   msg,
+				Severity:  severity,
+				Timestamp: now,
+			})
+		}
 	}
 
 	if out == nil {
