@@ -94,7 +94,7 @@ func (w *Worker) SendMorningBrief(ctx context.Context) {
 		topLongs = topLongs[:2]
 	}
 
-	// Top 2 most crowded shorts (lowest long_pct)
+	// Top 2 most crowded shorts: sort by long_pct ascending (lowest longs = most crowded shorts)
 	avgShorts := make([]symLongPct, len(avgLongs))
 	copy(avgShorts, avgLongs)
 	sort.Slice(avgShorts, func(i, j int) bool { return avgShorts[i].longPct < avgShorts[j].longPct })
@@ -192,10 +192,11 @@ func (w *Worker) buildBrief(
 	}
 	longsStr = strings.TrimSuffix(longsStr, ", ")
 
-	// Most crowded shorts
+	// Most crowded shorts (display short_pct = 100 - long_pct)
 	var shortsStr string
 	for _, p := range topShorts {
-		shortsStr += fmt.Sprintf("%s (%.1f%%), ", p.sym, p.longPct)
+		shortPct := 100 - p.longPct
+		shortsStr += fmt.Sprintf("%s (%.1f%% shorts), ", p.sym, shortPct)
 	}
 	shortsStr = strings.TrimSuffix(shortsStr, ", ")
 
