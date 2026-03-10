@@ -29,6 +29,15 @@ type subscriberInsert struct {
 	Rules            json.RawMessage `json:"rules"`
 }
 
+// subscriberUpsert includes active for upsert — on conflict we update and set active=true.
+type subscriberUpsert struct {
+	TelegramUsername string          `json:"telegram_username"`
+	ChatID           int64           `json:"chat_id"`
+	Symbols          []string        `json:"symbols"`
+	Rules            json.RawMessage `json:"rules"`
+	Active           bool            `json:"active"`
+}
+
 // alertLogRow mirrors the `alert_log` table in Supabase.
 type alertLogRow struct {
 	SubscriberID string    `json:"subscriber_id"`
@@ -104,24 +113,26 @@ func (c *Client) UpdateChatID(ctx context.Context, username string, chatID int64
 	return nil
 }
 
-// CreateSubscriber inserts a new row into the `subscribers` table.
-// POST {baseURL}/rest/v1/subscribers
+// CreateSubscriber upserts a row into the `subscribers` table.
+// On conflict (telegram_username), updates chat_id, symbols, rules, and sets active=true.
+// POST {baseURL}/rest/v1/subscribers?on_conflict=telegram_username
 func (c *Client) CreateSubscriber(ctx context.Context, sub Subscriber) error {
-	url := c.baseURL + "/rest/v1/subscribers"
-	insert := subscriberInsert{
+	url := c.baseURL + "/rest/v1/subscribers?on_conflict=telegram_username"
+	upsert := subscriberUpsert{
 		TelegramUsername: sub.TelegramUsername,
 		ChatID:           sub.ChatID,
 		Symbols:          sub.Symbols,
 		Rules:            sub.Rules,
+		Active:           true,
 	}
-	body, _ := json.Marshal(insert)
+	body, _ := json.Marshal(upsert)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("supabase: build request: %w", err)
 	}
 	c.setHeaders(req)
-	req.Header.Set("Prefer", "return=minimal")
+	req.Header.Set("Prefer", "return=minimal,resolution=merge-duplicates")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
