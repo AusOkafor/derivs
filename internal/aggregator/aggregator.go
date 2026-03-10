@@ -94,6 +94,19 @@ type bnLongShortItem struct {
 	Timestamp      int64  `json:"timestamp"` // unix ms
 }
 
+// ─── OKX raw response shapes ───────────────────────────────────────────────────
+
+type okxLSItem struct {
+	Symbol     string `json:"instId"`
+	LongRatio  string `json:"longRatio"`
+	ShortRatio string `json:"shortRatio"`
+	Ts         string `json:"ts"`
+}
+
+type okxLSResult struct {
+	Data []okxLSItem `json:"data"`
+}
+
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
 
 func (a *Aggregator) publicGet(ctx context.Context, url string, out any) error {
@@ -401,6 +414,51 @@ func (a *Aggregator) FetchFundingHistory(ctx context.Context, symbol string, lim
 	return points, nil
 }
 
+// fetchOKXLongShort fetches long/short ratio from OKX.
+// GET https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract?instId={symbol}-USDT-SWAP&period=1H
+// No API key required.
+// Parse longRatio and shortRatio as float64 * 100 for percentages.
+func (a *Aggregator) fetchOKXLongShort(ctx context.Context, symbol string) (models.LongShortRatio, error) {
+	instID := strings.ToUpper(symbol) + "-USDT-SWAP"
+	u := fmt.Sprintf(
+		"https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract?instId=%s&period=1H",
+		instID,
+	)
+
+	var raw struct {
+		Code string      `json:"code"`
+		Data []okxLSItem `json:"data"`
+	}
+	if err := a.publicGet(ctx, u, &raw); err != nil {
+		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: %w", err)
+	}
+	if len(raw.Data) == 0 {
+		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: no data for %s", symbol)
+	}
+
+	item := raw.Data[0]
+	longPct, _ := strconv.ParseFloat(item.LongRatio, 64)
+	shortPct, _ := strconv.ParseFloat(item.ShortRatio, 64)
+	tsMs, _ := strconv.ParseInt(item.Ts, 10, 64)
+
+	longPct *= 100
+	shortPct *= 100
+
+	ratio := longPct / shortPct
+	if shortPct == 0 {
+		ratio = 0
+	}
+
+	return models.LongShortRatio{
+		Symbol:    symbol,
+		Exchange:  "OKX",
+		LongPct:   longPct,
+		ShortPct:  shortPct,
+		Ratio:     ratio,
+		Timestamp: time.UnixMilli(tsMs).UTC(),
+	}, nil
+}
+
 // fetchBybitLongShort fetches the global long/short account ratio from Bybit.
 func (a *Aggregator) fetchBybitLongShort(ctx context.Context, symbol string) (models.LongShortRatio, error) {
 	u := fmt.Sprintf(
@@ -523,6 +581,13 @@ func (a *Aggregator) FetchSnapshot(ctx context.Context, symbol string) (models.M
 			log.Printf("aggregator: %v", err)
 		} else {
 			ratios = append(ratios, bybit)
+		}
+
+		okx, err := a.fetchOKXLongShort(ctx, symbol)
+		if err != nil {
+			log.Printf("aggregator: %v", err)
+		} else {
+			ratios = append(ratios, okx)
 		}
 
 		if len(ratios) > 0 {
