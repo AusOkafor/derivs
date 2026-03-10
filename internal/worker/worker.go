@@ -142,8 +142,10 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 			log.Printf("worker: FetchSnapshot(%s): %v", sym, err)
 			continue
 		}
-		snapshots[sym] = symbolAlerts{
-			detected: w.detector.Analyze(snap),
+		alerts := w.detector.Analyze(snap)
+		snapshots[sym] = symbolAlerts{detected: alerts}
+		if !freeOnly {
+			log.Printf("worker: pro cycle found %d alerts for %s", len(alerts), sym)
 		}
 	}
 
@@ -186,6 +188,9 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 					continue
 				}
 
+				if !freeOnly {
+					log.Printf("worker: pro cycle sending alert to %s: %s", sub.TelegramUsername, alert.Message)
+				}
 				sentThisCycle[cycleKey] = true
 
 				if err := w.db.LogAlert(ctx, sub.ID, sym, alert.ID); err != nil {
