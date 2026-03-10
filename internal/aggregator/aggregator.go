@@ -96,15 +96,8 @@ type bnLongShortItem struct {
 
 // ─── OKX raw response shapes ───────────────────────────────────────────────────
 
-type okxLSItem struct {
-	Symbol     string `json:"instId"`
-	LongRatio  string `json:"longRatio"`
-	ShortRatio string `json:"shortRatio"`
-	Ts         string `json:"ts"`
-}
-
 type okxLSResult struct {
-	Data []okxLSItem `json:"data"`
+	Data [][]string `json:"data"`
 }
 
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
@@ -426,23 +419,22 @@ func (a *Aggregator) fetchOKXLongShort(ctx context.Context, symbol string) (mode
 	)
 
 	var raw struct {
-		Code string      `json:"code"`
-		Data []okxLSItem `json:"data"`
+		Code string       `json:"code"`
+		Data [][]string   `json:"data"`
 	}
 	if err := a.publicGet(ctx, u, &raw); err != nil {
 		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: %w", err)
 	}
-	if len(raw.Data) == 0 {
+	// Each inner array is: [timestamp, longRatio, shortRatio]
+	// e.g. [["1234567890000", "0.5972", "0.4028"]]
+	if len(raw.Data) == 0 || len(raw.Data[0]) < 3 {
 		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: no data for %s", symbol)
 	}
 
 	item := raw.Data[0]
-	longPct, _ := strconv.ParseFloat(item.LongRatio, 64)
-	shortPct, _ := strconv.ParseFloat(item.ShortRatio, 64)
-	tsMs, _ := strconv.ParseInt(item.Ts, 10, 64)
-
-	longPct *= 100
-	shortPct *= 100
+	ts, _ := strconv.ParseInt(item[0], 10, 64)
+	longPct, _ := strconv.ParseFloat(item[1], 64)
+	shortPct, _ := strconv.ParseFloat(item[2], 64)
 
 	ratio := longPct / shortPct
 	if shortPct == 0 {
@@ -452,10 +444,10 @@ func (a *Aggregator) fetchOKXLongShort(ctx context.Context, symbol string) (mode
 	return models.LongShortRatio{
 		Symbol:    symbol,
 		Exchange:  "OKX",
-		LongPct:   longPct,
-		ShortPct:  shortPct,
+		LongPct:   longPct * 100,
+		ShortPct:  shortPct * 100,
 		Ratio:     ratio,
-		Timestamp: time.UnixMilli(tsMs).UTC(),
+		Timestamp: time.UnixMilli(ts).UTC(),
 	}, nil
 }
 
