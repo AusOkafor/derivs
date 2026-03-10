@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -60,6 +61,10 @@ func (w *Worker) Start(ctx context.Context) {
 
 // runCycle executes one full notification cycle.
 func (w *Worker) runCycle(ctx context.Context) {
+	// Track alerts sent THIS cycle to prevent duplicates within the same run.
+	// key: "subscriberID:alertID"
+	sentThisCycle := make(map[string]bool)
+
 	subscribers, err := w.db.GetActiveSubscribers(ctx)
 	if err != nil {
 		log.Printf("worker: GetActiveSubscribers: %v", err)
@@ -112,12 +117,17 @@ func (w *Worker) runCycle(ctx context.Context) {
 					continue
 				}
 
-				sent, err := w.db.WasAlertSent(ctx, sub.ID, alert.ID)
+				cycleKey := fmt.Sprintf("%s:%s", sub.ID, alert.ID)
+				if sentThisCycle[cycleKey] {
+					continue
+				}
+
+				alreadySent, err := w.db.WasAlertSent(ctx, sub.ID, alert.ID)
 				if err != nil {
 					log.Printf("worker: WasAlertSent(sub=%s, alert=%s): %v", sub.ID, alert.ID, err)
 					continue
 				}
-				if sent {
+				if alreadySent {
 					continue
 				}
 
@@ -126,6 +136,8 @@ func (w *Worker) runCycle(ctx context.Context) {
 					log.Printf("worker: SendMessage(chat=%d): %v", sub.ChatID, err)
 					continue
 				}
+
+				sentThisCycle[cycleKey] = true
 
 				if err := w.db.LogAlert(ctx, sub.ID, sym, alert.ID); err != nil {
 					log.Printf("worker: LogAlert(sub=%s, alert=%s): %v", sub.ID, alert.ID, err)
