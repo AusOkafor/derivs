@@ -3,9 +3,13 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,4 +87,38 @@ func severityEmoji(severity string) string {
 	default:
 		return "⚪"
 	}
+}
+
+// VerifyAuth validates Telegram Login Widget auth data using HMAC-SHA256.
+// See https://core.telegram.org/widgets/login#checking-authorization
+func (t *TelegramNotifier) VerifyAuth(data map[string]string) bool {
+	hash, ok := data["hash"]
+	if !ok || hash == "" {
+		return false
+	}
+	delete(data, "hash")
+
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(data[k])
+	}
+	checkString := b.String()
+
+	secretKey := sha256.Sum256([]byte(t.botToken))
+	mac := hmac.New(sha256.New, secretKey[:])
+	mac.Write([]byte(checkString))
+	expected := hex.EncodeToString(mac.Sum(nil))
+
+	return hmac.Equal([]byte(expected), []byte(hash))
 }

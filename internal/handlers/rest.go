@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -163,9 +166,16 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 // ─── Subscription endpoints ───────────────────────────────────────────────────
 
 type subscribeRequest struct {
-	TelegramUsername string          `json:"telegram_username"`
-	Symbols          []string        `json:"symbols"`
-	Rules            json.RawMessage `json:"rules"`
+	TelegramUser struct {
+		ID        int64  `json:"id"`
+		FirstName string `json:"first_name"`
+		Username  string `json:"username"`
+		PhotoURL  string `json:"photo_url"`
+		AuthDate  int64  `json:"auth_date"`
+		Hash      string `json:"hash"`
+	} `json:"telegram_user"`
+	Symbols []string        `json:"symbols"`
+	Rules   json.RawMessage `json:"rules"`
 }
 
 // Subscribe handles POST /api/subscribe.
@@ -181,23 +191,47 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TelegramUsername == "" || len(req.Symbols) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram_username and symbols are required"})
+	if req.TelegramUser.ID == 0 || req.TelegramUser.Hash == "" || len(req.Symbols) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram_user and symbols are required"})
+		return
+	}
+
+	// Build data map for hash verification (all fields except hash, as strings)
+	data := map[string]string{
+		"auth_date":  strconv.FormatInt(req.TelegramUser.AuthDate, 10),
+		"first_name": req.TelegramUser.FirstName,
+		"hash":       req.TelegramUser.Hash,
+		"id":         strconv.FormatInt(req.TelegramUser.ID, 10),
+	}
+	if req.TelegramUser.Username != "" {
+		data["username"] = req.TelegramUser.Username
+	}
+	if req.TelegramUser.PhotoURL != "" {
+		data["photo_url"] = req.TelegramUser.PhotoURL
+	}
+
+	if !h.notifier.VerifyAuth(data) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid telegram auth"})
 		return
 	}
 
 	ctx := r.Context()
 
+	// Use username from Telegram, or fallback to user_<id> for deduplication
+	telegramUsername := req.TelegramUser.Username
+	if telegramUsername == "" {
+		telegramUsername = "user_" + strconv.FormatInt(req.TelegramUser.ID, 10)
+	}
+
 	sub := supabase.Subscriber{
-		TelegramUsername: req.TelegramUsername,
-		ChatID:           0, // populated later when user sends /start
+		TelegramUsername: telegramUsername,
+		ChatID:           req.TelegramUser.ID, // real ID from widget — no webhook needed
 		Symbols:          req.Symbols,
 		Rules:            req.Rules,
 		Active:           true,
 	}
 
 	if err := h.db.CreateSubscriber(ctx, sub); err != nil {
-		// Treat any conflict-style error as a duplicate.
 		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "already subscribed"})
 			return
@@ -207,9 +241,19 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Send welcome message immediately
+	welcomeMsg := fmt.Sprintf(
+		"✅ <b>DerivLens Alerts Activated!</b>\nHello %s! You'll receive alerts for: %s\nPowered by DerivLens 🚀",
+		req.TelegramUser.FirstName,
+		strings.Join(req.Symbols, ", "),
+	)
+	if err := h.notifier.SendMessage(context.Background(), req.TelegramUser.ID, welcomeMsg); err != nil {
+		log.Printf("subscribe: SendMessage: %v", err)
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]string{
-		"status":  "pending",
-		"message": "Almost done! Send /start to @derivlens_alerts_bot on Telegram to activate your alerts.",
+		"status":  "activated",
+		"message": "Alerts activated! Check your Telegram for confirmation.",
 	})
 }
 
