@@ -96,7 +96,10 @@ func (s *StripeClient) HandleWebhook(payload []byte, sigHeader string, updateFn 
 		return fmt.Errorf("billing: webhook secret not configured")
 	}
 
-	evt, err := webhook.ConstructEvent(payload, sigHeader, s.webhookSecret)
+	evt, err := webhook.ConstructEventWithOptions(payload, sigHeader, s.webhookSecret,
+		webhook.ConstructEventOptions{
+			IgnoreAPIVersionMismatch: true,
+		})
 	if err != nil {
 		return fmt.Errorf("billing: webhook signature invalid: %w", err)
 	}
