@@ -93,6 +93,38 @@ func (c *Client) GetActiveSubscribers(ctx context.Context) ([]Subscriber, error)
 	return subs, nil
 }
 
+// GetSubscriberChatID returns the chat_id for a given telegram_username.
+// GET {baseURL}/rest/v1/subscribers?telegram_username=eq.{username}&select=chat_id
+func (c *Client) GetSubscriberChatID(ctx context.Context, username string) (int64, error) {
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=chat_id", c.baseURL, username)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("supabase: GetSubscriberChatID: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("supabase: GetSubscriberChatID: status %d", resp.StatusCode)
+	}
+
+	var subs []struct {
+		ChatID int64 `json:"chat_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&subs); err != nil {
+		return 0, fmt.Errorf("supabase: GetSubscriberChatID decode: %w", err)
+	}
+	if len(subs) == 0 {
+		return 0, fmt.Errorf("supabase: no subscriber found for username")
+	}
+	return subs[0].ChatID, nil
+}
+
 // UpdateChatID sets the chat_id for a subscriber identified by telegram_username.
 // PATCH {baseURL}/rest/v1/subscribers?telegram_username=eq.{username}
 func (c *Client) UpdateChatID(ctx context.Context, username string, chatID int64) error {

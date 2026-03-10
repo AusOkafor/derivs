@@ -267,7 +267,11 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 
 	chatID := req.TelegramUser.ID
 	if isManual {
-		chatID = 0 // rely on /start webhook to populate later
+		chatID = 0 // default: rely on /start webhook to populate later
+		existingChatID, err := h.db.GetSubscriberChatID(ctx, telegramUsername)
+		if err == nil && existingChatID != 0 {
+			chatID = existingChatID // preserve the real chat_id
+		}
 	}
 
 	sub := supabase.Subscriber{
