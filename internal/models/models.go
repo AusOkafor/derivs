@@ -98,8 +98,14 @@ type FundingRatePoint struct {
 	Rate      float64 `json:"rate"`
 }
 
+type OICandle struct {
+	Timestamp int64   `json:"timestamp"`
+	OIUsd     float64 `json:"oi_usd"`
+}
+
 type HistoricalData struct {
 	Symbol         string             `json:"symbol"`
 	FundingHistory []FundingRatePoint `json:"funding_history"`
+	OIHistory      []OICandle         `json:"oi_history"`
 	Timestamp      time.Time          `json:"timestamp"`
 }

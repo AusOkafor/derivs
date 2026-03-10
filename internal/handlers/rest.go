@@ -69,7 +69,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetHistory handles GET /api/history?symbol=BTC
-// Returns HistoricalData with the last 48 hourly funding rate points.
+// Returns HistoricalData with the last 48 hourly funding rate points and OI candles.
 func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	symbol := r.URL.Query().Get("symbol")
 	if symbol == "" {
@@ -79,15 +79,35 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	history, err := h.aggregator.FetchFundingHistory(ctx, symbol, 48)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	var fundingHistory []models.FundingRatePoint
+	var oiHistory []models.OICandle
+	var wg sync.WaitGroup
+	var fundingErr, oiErr error
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		fundingHistory, fundingErr = h.aggregator.FetchFundingHistory(ctx, symbol, 48)
+	}()
+	go func() {
+		defer wg.Done()
+		oiHistory, oiErr = h.aggregator.FetchOIHistory(ctx, symbol, 48)
+	}()
+	wg.Wait()
+
+	if fundingErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fundingErr.Error()})
 		return
+	}
+	if oiErr != nil {
+		log.Printf("GetHistory: FetchOIHistory: %v", oiErr)
+		oiHistory = nil
 	}
 
 	writeJSON(w, http.StatusOK, models.HistoricalData{
 		Symbol:         symbol,
-		FundingHistory: history,
+		FundingHistory: fundingHistory,
+		OIHistory:      oiHistory,
 		Timestamp:      time.Now().UTC(),
 	})
 }

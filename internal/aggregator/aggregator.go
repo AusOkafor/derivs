@@ -317,6 +317,59 @@ func (a *Aggregator) fetchBinanceData(ctx context.Context, symbol string) ([]mod
 	return ratios, nil
 }
 
+// FetchOIHistory returns the last 48 hourly OI candles for a symbol.
+// Reuses the existing OI endpoint:
+// GET https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol}USDT&intervalTime=1h&limit=48
+// Converts each entry from contracts to USD using current price from ticker.
+// Returns oldest-first.
+func (a *Aggregator) FetchOIHistory(ctx context.Context, symbol string, limit int) ([]models.OICandle, error) {
+	sym := perpSymbol(symbol)
+
+	oiURL := fmt.Sprintf(
+		"https://api.bybit.com/v5/market/open-interest?category=linear&symbol=%s&intervalTime=1h&limit=%d",
+		sym, limit,
+	)
+	var oiRaw bybitResp[bybitOIResult]
+	if err := a.publicGet(ctx, oiURL, &oiRaw); err != nil {
+		return nil, fmt.Errorf("FetchOIHistory: %w", err)
+	}
+	if len(oiRaw.Result.List) == 0 {
+		return nil, fmt.Errorf("FetchOIHistory: no OI data for %s", symbol)
+	}
+
+	tickerURL := fmt.Sprintf(
+		"https://api.bybit.com/v5/market/tickers?category=linear&symbol=%s",
+		sym,
+	)
+	var tickerRaw bybitResp[bybitTickerResult]
+	if err := a.publicGet(ctx, tickerURL, &tickerRaw); err != nil {
+		return nil, fmt.Errorf("FetchOIHistory price: %w", err)
+	}
+	if len(tickerRaw.Result.List) == 0 {
+		return nil, fmt.Errorf("FetchOIHistory: no ticker data for %s", symbol)
+	}
+	price, _ := strconv.ParseFloat(tickerRaw.Result.List[0].LastPrice, 64)
+	if price == 0 {
+		return nil, fmt.Errorf("FetchOIHistory: invalid price for %s", symbol)
+	}
+
+	list := oiRaw.Result.List
+	for i, j := 0, len(list)-1; i < j; i, j = i+1, j-1 {
+		list[i], list[j] = list[j], list[i]
+	}
+
+	candles := make([]models.OICandle, 0, len(list))
+	for _, item := range list {
+		contracts, _ := strconv.ParseFloat(item.OpenInterest, 64)
+		ts, _ := strconv.ParseInt(item.Timestamp, 10, 64)
+		candles = append(candles, models.OICandle{
+			Timestamp: ts,
+			OIUsd:     contracts * price,
+		})
+	}
+	return candles, nil
+}
+
 // FetchFundingHistory returns the last `limit` hourly funding rate points for
 // a symbol, oldest-first. Bybit returns newest-first so we reverse the list.
 func (a *Aggregator) FetchFundingHistory(ctx context.Context, symbol string, limit int) ([]models.FundingRatePoint, error) {
