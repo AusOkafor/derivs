@@ -1,0 +1,290 @@
+package handlers
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"derivs-backend/internal/models"
+	"derivs-backend/internal/supabase"
+)
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
+
+// GetSnapshot handles GET /api/snapshot?symbol=BTC
+func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol query parameter is required"})
+		return
+	}
+
+	if cached, ok := h.cache.Get(symbol); ok {
+		w.Header().Set("X-Cache", "HIT")
+		writeJSON(w, http.StatusOK, cached)
+		return
+	}
+
+	ctx := r.Context()
+
+	snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Analyze always returns a usable value (fallback on error); discard the error
+	// since the fallback is intentionally safe to serve.
+	ai, _ := h.analyzer.Analyze(ctx, snap)
+
+	result := models.SnapshotWithAnalysis{
+		Snapshot:  snap,
+		Analysis:  ai,
+		Alerts:    h.detector.Analyze(snap),
+		FearGreed: h.calc.Calculate(snap),
+	}
+
+	h.cache.Set(symbol, result)
+
+	w.Header().Set("X-Cache", "MISS")
+	writeJSON(w, http.StatusOK, result)
+}
+
+// Health handles GET /api/health
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":    "ok",
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// GetHistory handles GET /api/history?symbol=BTC
+// Returns HistoricalData with the last 48 hourly funding rate points.
+func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol query parameter is required"})
+		return
+	}
+
+	ctx := r.Context()
+
+	history, err := h.aggregator.FetchFundingHistory(ctx, symbol, 48)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, models.HistoricalData{
+		Symbol:         symbol,
+		FundingHistory: history,
+		Timestamp:      time.Now().UTC(),
+	})
+}
+
+// GetAlerts handles GET /api/alerts?symbol=BTC
+// Fetches a fresh snapshot and runs alert detection. Does not use the cache
+// so that callers always get current anomaly detection.
+func (h *Handler) GetAlerts(w http.ResponseWriter, r *http.Request) {
+	symbol := r.URL.Query().Get("symbol")
+	if symbol == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol query parameter is required"})
+		return
+	}
+
+	ctx := r.Context()
+
+	snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, h.detector.Analyze(snap))
+}
+
+// GetTickers handles GET /api/tickers?symbols=BTC,ETH,SOL,ARB,DOGE,AVAX
+// Fetches all symbols concurrently and returns []models.TickerInfo.
+func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
+	symbolsParam := r.URL.Query().Get("symbols")
+	if symbolsParam == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbols query parameter is required"})
+		return
+	}
+
+	symbols := strings.Split(symbolsParam, ",")
+	ctx := r.Context()
+
+	results := make([]models.TickerInfo, len(symbols))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for i, sym := range symbols {
+		wg.Add(1)
+		go func(idx int, symbol string) {
+			defer wg.Done()
+			symbol = strings.TrimSpace(symbol)
+			price, change24h, err := h.aggregator.FetchTicker(ctx, symbol)
+			if err != nil {
+				log.Printf("tickers: %v", err)
+				return
+			}
+			mu.Lock()
+			results[idx] = models.TickerInfo{
+				Symbol:    symbol,
+				Price:     price,
+				Change24h: change24h,
+				Timestamp: time.Now().UTC(),
+			}
+			mu.Unlock()
+		}(i, sym)
+	}
+
+	wg.Wait()
+
+	// Filter out zero-value entries from failed fetches.
+	tickers := make([]models.TickerInfo, 0, len(results))
+	for _, t := range results {
+		if t.Symbol != "" {
+			tickers = append(tickers, t)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, tickers)
+}
+
+// ─── Subscription endpoints ───────────────────────────────────────────────────
+
+type subscribeRequest struct {
+	TelegramUsername string          `json:"telegram_username"`
+	Symbols          []string        `json:"symbols"`
+	Rules            json.RawMessage `json:"rules"`
+}
+
+// Subscribe handles POST /api/subscribe.
+func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req subscribeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.TelegramUsername == "" || len(req.Symbols) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram_username and symbols are required"})
+		return
+	}
+
+	ctx := r.Context()
+
+	sub := supabase.Subscriber{
+		TelegramUsername: req.TelegramUsername,
+		ChatID:           0, // populated later when user sends /start
+		Symbols:          req.Symbols,
+		Rules:            req.Rules,
+		Active:           true,
+	}
+
+	if err := h.db.CreateSubscriber(ctx, sub); err != nil {
+		// Treat any conflict-style error as a duplicate.
+		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "already subscribed"})
+			return
+		}
+		log.Printf("subscribe: CreateSubscriber: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create subscription"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"status":  "pending",
+		"message": "Almost done! Send /start to @derivlens_alerts_bot on Telegram to activate your alerts.",
+	})
+}
+
+// Unsubscribe handles DELETE /api/unsubscribe.
+func (h *Handler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		TelegramUsername string `json:"telegram_username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TelegramUsername == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram_username is required"})
+		return
+	}
+
+	if err := h.db.DeleteSubscriber(r.Context(), req.TelegramUsername); err != nil {
+		log.Printf("unsubscribe: DeleteSubscriber(%s): %v", req.TelegramUsername, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to unsubscribe"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "unsubscribed"})
+}
+
+// ─── Telegram webhook ─────────────────────────────────────────────────────────
+
+// telegramUpdate is the minimal subset of a Telegram Update object we care about.
+type telegramUpdate struct {
+	Message struct {
+		Chat struct {
+			ID int64 `json:"id"`
+		} `json:"chat"`
+		From struct {
+			Username string `json:"username"`
+		} `json:"from"`
+		Text string `json:"text"`
+	} `json:"message"`
+}
+
+// TelegramWebhook handles POST /api/webhook/telegram.
+// Telegram requires a 200 response for every update, even on errors.
+func (h *Handler) TelegramWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusOK) // always 200 to Telegram
+		return
+	}
+
+	var update telegramUpdate
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		log.Printf("telegram webhook: decode: %v", err)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	msg := update.Message
+	if msg.Text != "/start" || msg.From.Username == "" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	ctx := r.Context()
+
+	if err := h.db.UpdateChatID(ctx, msg.From.Username, msg.Chat.ID); err != nil {
+		log.Printf("telegram webhook: UpdateChatID(%s, %d): %v", msg.From.Username, msg.Chat.ID, err)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	welcome := "✅ <b>DerivLens Alerts Activated!</b>\nYou'll receive alerts for your subscribed symbols.\nPowered by DerivLens 🚀"
+	if err := h.notifier.SendMessage(ctx, msg.Chat.ID, welcome); err != nil {
+		log.Printf("telegram webhook: SendMessage(%d): %v", msg.Chat.ID, err)
+	}
+
+	w.WriteHeader(http.StatusOK)
+}

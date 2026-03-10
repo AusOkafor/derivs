@@ -1,0 +1,25 @@
+# Secret keys — never commit
+.env
+*.env
+.env.*
+!.env.example
+
+# Compiled binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+main
+/derivs-backend
+
+# Go build cache
+/vendor/
+*.test
+*.out
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db
