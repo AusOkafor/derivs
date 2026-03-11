@@ -116,6 +116,9 @@ func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagn
 
 func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 	currentPrice := snap.LiquidationMap.CurrentPrice
+	levelCount := len(snap.LiquidationMap.Levels)
+	log.Printf("[gravity] ENTRY symbol=%s currentPrice=%.2f levels=%d", snap.Symbol, currentPrice, levelCount)
+
 	if currentPrice == 0 {
 		return models.LiquidityGravity{Dominant: "neutral", UpwardPull: 50, DownwardPull: 50}
 	}
