@@ -22,17 +22,34 @@ type priceBucket struct {
 
 // groupIntoBuckets groups levels by floor(price/bucketSize)*bucketSize and side.
 // Returns buckets sorted by totalUSD descending.
+// Uses dynamic bucket size for low-priced assets (e.g. SOL) so minPrice is never 0.
 func groupIntoBuckets(levels []models.LiquidationLevel, bucketSize float64) []priceBucket {
+	if len(levels) == 0 {
+		return nil
+	}
+	var maxPrice float64
+	for _, l := range levels {
+		if l.Price > maxPrice {
+			maxPrice = l.Price
+		}
+	}
+	if maxPrice < 1000 && bucketSize > maxPrice/5 {
+		bucketSize = math.Max(10, maxPrice/20)
+	}
 	type bucketKey struct {
 		side  string
 		start float64
 	}
 	m := make(map[bucketKey]*priceBucket)
 	for _, lvl := range levels {
-		start := math.Floor(lvl.Price/bucketSize) * bucketSize
-		k := bucketKey{side: lvl.Side, start: start}
+		bucketFloor := math.Floor(lvl.Price/bucketSize) * bucketSize
+		k := bucketKey{side: lvl.Side, start: bucketFloor}
 		if m[k] == nil {
-			m[k] = &priceBucket{side: lvl.Side, minPrice: start, maxPrice: start + bucketSize}
+			m[k] = &priceBucket{
+				side:     lvl.Side,
+				minPrice: bucketFloor,
+				maxPrice: bucketFloor + bucketSize,
+			}
 		}
 		m[k].totalUSD += lvl.SizeUsd
 		m[k].count++
@@ -65,13 +82,16 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 
 	// ── Rule 1: Elevated funding rate ────────────────────────────────────────
 	rate := snap.FundingRate.Rate
-	if rate > 0.0005 || rate < -0.0005 {
-		side := "long"
-		if rate < 0 {
-			side = "short"
-		}
+	if rate > 0.0005 {
 		add("funding-elevated",
-			fmt.Sprintf("Funding rate at %.4f%% — elevated %s squeeze risk", rate*100, side),
+			fmt.Sprintf("Funding rate spiking at +%.4f%% (APR %.1f%%) — longs paying heavily, overleveraged market. Watch for long squeeze if price stalls.",
+				rate*100, rate*100*3*365),
+			"high",
+		)
+	} else if rate < -0.0005 {
+		add("funding-elevated",
+			fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure. Watch for short squeeze rally.",
+				rate*100),
 			"high",
 		)
 	}
@@ -79,27 +99,26 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 	// ── Rule 2: OI spike (1h) ─────────────────────────────────────────────────
 	oi1h := snap.OpenInterest.OIChange1h
 	if math.Abs(oi1h) > 2.0 {
-		direction := "accumulation"
-		if oi1h < 0 {
-			direction = "distribution"
-		}
+		change := oi1h
 		add("oi-spike-1h",
-			fmt.Sprintf("OI spike %+.2f%% in 1h without price confirmation — potential %s", oi1h, direction),
+			fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Watch for volatile directional move as positions build.",
+				change),
 			"high",
 		)
 	}
 
 	// ── Rule 3: OI divergence (24h) ───────────────────────────────────────────
 	oi24h := snap.OpenInterest.OIChange24h
-	if math.Abs(oi24h) > 5.0 {
-		upDown := "up"
-		action := "building"
-		if oi24h < 0 {
-			upDown = "down"
-			action = "unwinding"
-		}
+	if oi24h > 5.0 {
 		add("oi-divergence-24h",
-			fmt.Sprintf("Open interest %s %.2f%% in 24h — %s leverage detected", upDown, math.Abs(oi24h), action),
+			fmt.Sprintf("OI up %.1f%% in 24h — new money entering fast. Watch for volatile directional move as positions build.",
+				oi24h),
+			"medium",
+		)
+	} else if oi24h < -5.0 {
+		add("oi-divergence-24h",
+			fmt.Sprintf("Open interest down %.1f%% in 24h — leverage unwinding detected. Market deleveraging, expect lower volatility.",
+				math.Abs(oi24h)),
 			"medium",
 		)
 	}
@@ -111,16 +130,19 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 			sumLong += r.LongPct
 		}
 		avgLong := sumLong / float64(len(snap.LongShortRatios))
+		shortPct := 100.0 - avgLong
 
 		switch {
 		case avgLong > 65.0:
 			add("long-bias",
-				fmt.Sprintf("Long bias at %.1f%% across exchanges — crowded long, liquidation risk below current price", avgLong),
+				fmt.Sprintf("%.1f%% of traders are long across exchanges — crowded trade. High liquidation risk below current price if bulls lose control.",
+					avgLong),
 				"medium",
 			)
 		case avgLong < 35.0:
 			add("short-bias",
-				fmt.Sprintf("Short bias at %.1f%% across exchanges — crowded short, squeeze risk above current price", avgLong),
+				fmt.Sprintf("%.1f%% of traders are short — crowded short. Watch for short squeeze, especially on any positive catalyst.",
+					shortPct),
 				"medium",
 			)
 		}
@@ -129,9 +151,15 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 	// ── Rule 6: Large liquidation cluster ────────────────────────────────────
 	for _, lvl := range snap.LiquidationMap.Levels {
 		if lvl.SizeUsd > 500_000 {
-			add(fmt.Sprintf("liq-cluster-%.0f", lvl.Price),
-				fmt.Sprintf("Large %s liquidation cluster at $%.0f worth $%.2fM",
-					lvl.Side, lvl.Price, lvl.SizeUsd/1_000_000),
+			roundedPrice := math.Round(lvl.Price/100) * 100
+			id := fmt.Sprintf("liq-cluster-%d", int(roundedPrice))
+			direction := "downward"
+			if lvl.Side == "short" {
+				direction = "upward"
+			}
+			add(id,
+				fmt.Sprintf("Large %s liquidation cluster at $%.0f worth $%.2fM — if price reaches this level, expect accelerated %s move.",
+					lvl.Side, lvl.Price, lvl.SizeUsd/1_000_000, direction),
 				"high",
 			)
 		}
@@ -141,7 +169,8 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 	// Only fires if Rule 1 didn't already fire (avoid double-alerting).
 	if rate < -0.0001 && rate >= -0.0005 {
 		add("funding-negative",
-			fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure", rate*100),
+			fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure. Watch for short squeeze rally.",
+				rate*100),
 			"low",
 		)
 	}
@@ -154,11 +183,15 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 			if b.totalUSD >= 5_000_000 {
 				severity = "high"
 			}
-			id := fmt.Sprintf("%s-whale-%s-%.0f", snap.Symbol, b.side, b.minPrice)
-			msg := fmt.Sprintf("🐋 Large %s whale cluster near $%.0f: $%.2fM across %d levels",
-				b.side, b.minPrice, b.totalUSD/1_000_000, b.count)
+			direction := "downward"
+			if b.side == "short" {
+				direction = "upward"
+			}
+			id := fmt.Sprintf("whale-%s-%.0f", b.side, b.minPrice)
+			msg := fmt.Sprintf("🐋 Large %s whale cluster near $%.0f: $%.2fM across %d levels — significant %s pressure concentration.",
+				b.side, b.minPrice, b.totalUSD/1_000_000, b.count, direction)
 			out = append(out, models.Alert{
-				ID:        id,
+				ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 				Symbol:    snap.Symbol,
 				Message:   msg,
 				Severity:  severity,
