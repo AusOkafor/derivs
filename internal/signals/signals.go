@@ -22,13 +22,16 @@ func (e *Engine) Analyze(snap models.MarketSnapshot) models.MarketSignals {
 	// 2. Liquidation Magnet
 	sig.LiquidationMagnet = detectLiquidationMagnet(snap)
 
-	// 3. Squeeze Probabilities
+	// 3. Liquidity Gravity
+	sig.LiquidityGravity = calcLiquidityGravity(snap)
+
+	// 4. Squeeze Probabilities
 	sig.ShortSqueezeProbability, sig.LongSqueezeProbability = calcSqueezeProbability(snap)
 
 	// 5. Leverage Imbalance
 	sig.LeverageImbalance = detectLeverageImbalance(snap)
 
-	// 6. Market Regime (depends on all above)
+	// 6. Market Regime
 	sig.Regime, sig.RegimeConfidence = detectRegime(snap, sig)
 
 	return sig
@@ -116,10 +119,11 @@ func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagn
 
 func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 	currentPrice := snap.LiquidationMap.CurrentPrice
-	levelCount := len(snap.LiquidationMap.Levels)
-	log.Printf("[gravity] ENTRY symbol=%s currentPrice=%.2f levels=%d", snap.Symbol, currentPrice, levelCount)
+	log.Printf("[gravity-START] symbol=%s currentPrice=%.4f totalLevels=%d",
+		snap.Symbol, currentPrice, len(snap.LiquidationMap.Levels))
 
 	if currentPrice == 0 {
+		log.Printf("[gravity] currentPrice is 0, returning neutral")
 		return models.LiquidityGravity{Dominant: "neutral", UpwardPull: 50, DownwardPull: 50}
 	}
 
