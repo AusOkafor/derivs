@@ -133,13 +133,13 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 		shortPct := 100.0 - avgLong
 
 		switch {
-		case avgLong > 65.0:
+		case avgLong > 72.0:
 			add("long-bias",
 				fmt.Sprintf("%.1f%% of traders are long across exchanges — crowded trade. High liquidation risk below current price if bulls lose control.",
 					avgLong),
 				"medium",
 			)
-		case avgLong < 35.0:
+		case avgLong < 28.0:
 			add("short-bias",
 				fmt.Sprintf("%.1f%% of traders are short — crowded short. Watch for short squeeze, especially on any positive catalyst.",
 					shortPct),

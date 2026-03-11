@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +17,15 @@ import (
 	"derivs-backend/internal/notify"
 	"derivs-backend/internal/supabase"
 )
+
+const (
+	maxAlertsPerSymbol = 3
+	maxAlertsPerCycle  = 8
+	ruleTypeWindow     = 30 * time.Minute
+	maxSymbolsPerRule  = 3
+)
+
+var severityRank = map[string]int{"high": 0, "medium": 1, "low": 2}
 
 // Worker runs a background ticker that fetches market data, detects anomalies,
 // and dispatches Telegram notifications to active subscribers.
@@ -209,51 +220,104 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 			continue
 		}
 
+		// Collect all (symbol, alert) pairs that pass rules filter
+		type symAlert struct {
+			sym   string
+			alert models.Alert
+		}
+		var candidates []symAlert
 		for _, sym := range allowedSymbols(sub) {
 			sa, ok := snapshots[sym]
 			if !ok {
 				continue
 			}
-
 			for _, alert := range sa.detected {
-			if !w.shouldSendAlert(sub.Rules, alert) {
+				if !w.shouldSendAlert(sub.Rules, alert) {
+					continue
+				}
+				candidates = append(candidates, symAlert{sym: sym, alert: alert})
+			}
+		}
+
+		// Sort by severity (high first, then medium, then low)
+		sort.Slice(candidates, func(i, j int) bool {
+			ri := severityRank[candidates[i].alert.Severity]
+			rj := severityRank[candidates[j].alert.Severity]
+			if ri != rj {
+				return ri < rj
+			}
+			return candidates[i].alert.ID < candidates[j].alert.ID
+		})
+
+		// Build rule-type symbol count from recent alert_log (last 30 min)
+		ruleTypeSymbols := make(map[string]map[string]struct{})
+		recentLogs, err := w.db.GetRecentAlertLogs(ctx, sub.ID, time.Now().UTC().Add(-ruleTypeWindow))
+		if err != nil {
+			log.Printf("worker: GetRecentAlertLogs(sub=%s): %v", sub.ID, err)
+		} else {
+			for _, e := range recentLogs {
+				rt := ruleTypeFromAlertID(e.AlertID)
+				if ruleTypeSymbols[rt] == nil {
+					ruleTypeSymbols[rt] = make(map[string]struct{})
+				}
+				ruleTypeSymbols[rt][e.Symbol] = struct{}{}
+			}
+		}
+
+		sentPerSymbol := make(map[string]int)
+		sentTotal := 0
+
+		for _, ca := range candidates {
+			if sentTotal >= maxAlertsPerCycle {
+				break
+			}
+			if sentPerSymbol[ca.sym] >= maxAlertsPerSymbol {
+				continue
+			}
+
+			rt := ruleTypeFromAlertID(ca.alert.ID)
+			symbolsForRule := len(ruleTypeSymbols[rt])
+			if symbolsForRule >= maxSymbolsPerRule {
 				if proOnly {
-					log.Printf("worker: pro cycle skipping %s (rules filter)", alert.ID)
+					log.Printf("worker: pro cycle skipping %s (rule type %s already sent for %d symbols)", ca.alert.ID, rt, symbolsForRule)
 				}
 				continue
 			}
 
-				cycleKey := fmt.Sprintf("%s:%s", sub.ID, alert.ID)
-				if sentThisCycle[cycleKey] {
-					continue
-				}
+			cycleKey := fmt.Sprintf("%s:%s", sub.ID, ca.alert.ID)
+			if sentThisCycle[cycleKey] {
+				continue
+			}
 
-				alreadySent, err := w.db.WasAlertSent(ctx, sub.ID, alert.ID)
-				if err != nil {
-					log.Printf("worker: WasAlertSent(sub=%s, alert=%s): %v", sub.ID, alert.ID, err)
-					continue
-				}
-				if alreadySent {
-					if proOnly {
-						log.Printf("worker: pro cycle skipping %s (dedup: already sent within 1h)", alert.ID)
-					}
-					continue
-				}
+			alreadySent, err := w.db.WasAlertSent(ctx, sub.ID, ca.alert.ID)
+			if err != nil {
+				log.Printf("worker: WasAlertSent(sub=%s, alert=%s): %v", sub.ID, ca.alert.ID, err)
+				continue
+			}
+			if alreadySent {
+				continue
+			}
 
-				msg := w.notifier.FormatAlert(sym, alert)
-				if err := w.notifier.SendMessage(ctx, sub.ChatID, msg); err != nil {
-					log.Printf("worker: SendMessage(chat=%d): %v", sub.ChatID, err)
-					continue
-				}
+			msg := w.notifier.FormatAlert(ca.sym, ca.alert)
+			if err := w.notifier.SendMessage(ctx, sub.ChatID, msg); err != nil {
+				log.Printf("worker: SendMessage(chat=%d): %v", sub.ChatID, err)
+				continue
+			}
 
-				if proOnly {
-					log.Printf("worker: pro cycle sending alert to %s: %s", sub.TelegramUsername, alert.Message)
-				}
-				sentThisCycle[cycleKey] = true
+			if proOnly {
+				log.Printf("worker: pro cycle sending alert to %s: %s", sub.TelegramUsername, ca.alert.Message)
+			}
+			sentThisCycle[cycleKey] = true
+			sentPerSymbol[ca.sym]++
+			sentTotal++
 
-				if err := w.db.LogAlert(ctx, sub.ID, sym, alert.ID); err != nil {
-					log.Printf("worker: LogAlert(sub=%s, alert=%s): %v", sub.ID, alert.ID, err)
-				}
+			if ruleTypeSymbols[rt] == nil {
+				ruleTypeSymbols[rt] = make(map[string]struct{})
+			}
+			ruleTypeSymbols[rt][ca.sym] = struct{}{}
+
+			if err := w.db.LogAlert(ctx, sub.ID, ca.sym, ca.alert.ID); err != nil {
+				log.Printf("worker: LogAlert(sub=%s, alert=%s): %v", sub.ID, ca.alert.ID, err)
 			}
 		}
 	}
@@ -289,6 +353,25 @@ func (w *Worker) shouldSendAlert(rules json.RawMessage, alert models.Alert) bool
 	return enabled
 }
 
+// ruleTypeFromAlertID extracts the rule type from the full alert ID for dedup.
+// Format: "SYMBOL-rule-rest" e.g. "BTC-funding-elevated", "BTC-liq-cluster-69800".
+// Strips trailing numeric suffix so "liq-cluster-69800" and "liq-cluster-69700" map to "liq-cluster".
+func ruleTypeFromAlertID(alertID string) string {
+	parts := strings.SplitN(alertID, "-", 2)
+	if len(parts) < 2 {
+		return alertID
+	}
+	rest := parts[1]
+	// Strip trailing -NUMBER (e.g. liq-cluster-69800 -> liq-cluster, whale-long-150 -> whale-long)
+	if idx := strings.LastIndex(rest, "-"); idx >= 0 {
+		suffix := rest[idx+1:]
+		if regexp.MustCompile(`^\d+$`).MatchString(suffix) {
+			rest = rest[:idx]
+		}
+	}
+	return rest
+}
+
 // alertRuleKey maps an alert message to its rule key using keyword matching.
 func alertRuleKey(message string) string {
 	msg := strings.ToLower(message)
@@ -297,9 +380,9 @@ func alertRuleKey(message string) string {
 		return "funding_spike"
 	case strings.Contains(msg, "oi") || strings.Contains(msg, "open interest"):
 		return "oi_divergence"
-	case strings.Contains(msg, "long bias"):
+	case strings.Contains(msg, "long bias") || strings.Contains(msg, "traders are long"):
 		return "long_bias"
-	case strings.Contains(msg, "short bias"):
+	case strings.Contains(msg, "short bias") || strings.Contains(msg, "traders are short"):
 		return "short_bias"
 	case strings.Contains(msg, "liquidation"):
 		return "liquidation_cluster"

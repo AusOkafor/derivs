@@ -359,6 +359,40 @@ func (c *Client) WasAlertSent(ctx context.Context, subscriberID, alertID string)
 	return len(rows) > 0, nil
 }
 
+// RecentAlertLogEntry holds alert_id and symbol for dedup by rule type.
+type RecentAlertLogEntry struct {
+	AlertID string `json:"alert_id"`
+	Symbol  string `json:"symbol"`
+}
+
+// GetRecentAlertLogs returns alert_log rows for subscriberID within the given window.
+// Used to suppress same-rule-type alerts when 3+ symbols already sent.
+func (c *Client) GetRecentAlertLogs(ctx context.Context, subscriberID string, since time.Time) ([]RecentAlertLogEntry, error) {
+	sinceStr := since.Format(time.RFC3339)
+	url := fmt.Sprintf(
+		"%s/rest/v1/alert_log?subscriber_id=eq.%s&sent_at=gte.%s&select=alert_id,symbol",
+		c.baseURL, subscriberID, sinceStr,
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetRecentAlertLogs: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetRecentAlertLogs: status %d", resp.StatusCode)
+	}
+	var rows []RecentAlertLogEntry
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("supabase: GetRecentAlertLogs decode: %w", err)
+	}
+	return rows, nil
+}
+
 // LogAlertHistory logs every alert that fires (regardless of subscriber dedup).
 // POST {baseURL}/rest/v1/alert_history
 func (c *Client) LogAlertHistory(ctx context.Context, symbol, alertID, message, severity string) error {
