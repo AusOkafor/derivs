@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"derivs-backend/internal/models"
@@ -11,55 +12,86 @@ import (
 
 type Detector struct{}
 
-// priceBucket holds aggregated liquidation levels in a price range.
-type priceBucket struct {
-	side     string
-	totalUSD float64
-	minPrice float64
-	maxPrice float64
-	count    int
+// LiquidationZone holds aggregated liquidation levels within 0.5% of each other.
+type LiquidationZone struct {
+	MinPrice   float64
+	MaxPrice   float64
+	TotalUSD   float64
+	Side       string // "long", "short", or "mixed"
+	LevelCount int
+	HasWhale   bool // any single level > $500k
 }
 
-// groupIntoBuckets groups levels by floor(price/bucketSize)*bucketSize and side.
-// Returns buckets sorted by totalUSD descending.
-// Uses dynamic bucket size for low-priced assets (e.g. SOL) so minPrice is never 0.
-func groupIntoBuckets(levels []models.LiquidationLevel, bucketSize float64) []priceBucket {
-	if len(levels) == 0 {
+func aggregateLiquidationZones(levels []models.LiquidationLevel, currentPrice float64) []LiquidationZone {
+	if len(levels) == 0 || currentPrice == 0 {
 		return nil
 	}
-	var maxPrice float64
-	for _, l := range levels {
-		if l.Price > maxPrice {
-			maxPrice = l.Price
+
+	sorted := make([]models.LiquidationLevel, len(levels))
+	copy(sorted, levels)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Price < sorted[j].Price
+	})
+
+	var zones []LiquidationZone
+	var current *LiquidationZone
+
+	for _, lvl := range sorted {
+		if lvl.SizeUsd < 10_000 {
+			continue
 		}
-	}
-	if maxPrice < 1000 && bucketSize > maxPrice/5 {
-		bucketSize = math.Max(10, maxPrice/20)
-	}
-	type bucketKey struct {
-		side  string
-		start float64
-	}
-	m := make(map[bucketKey]*priceBucket)
-	for _, lvl := range levels {
-		bucketFloor := math.Floor(lvl.Price/bucketSize) * bucketSize
-		k := bucketKey{side: lvl.Side, start: bucketFloor}
-		if m[k] == nil {
-			m[k] = &priceBucket{
-				side:     lvl.Side,
-				minPrice: bucketFloor,
-				maxPrice: bucketFloor + bucketSize,
+		if current == nil {
+			current = &LiquidationZone{
+				MinPrice:   lvl.Price,
+				MaxPrice:   lvl.Price,
+				TotalUSD:   lvl.SizeUsd,
+				Side:       lvl.Side,
+				LevelCount: 1,
+				HasWhale:   lvl.SizeUsd >= 500_000,
+			}
+			continue
+		}
+		distFromZone := math.Abs(lvl.Price-current.MaxPrice) / currentPrice * 100
+		if distFromZone <= 0.5 {
+			current.MaxPrice = math.Max(current.MaxPrice, lvl.Price)
+			current.MinPrice = math.Min(current.MinPrice, lvl.Price)
+			current.TotalUSD += lvl.SizeUsd
+			current.LevelCount++
+			if lvl.Side != current.Side {
+				current.Side = "mixed"
+			}
+			if lvl.SizeUsd >= 500_000 {
+				current.HasWhale = true
+			}
+		} else {
+			zones = append(zones, *current)
+			current = &LiquidationZone{
+				MinPrice:   lvl.Price,
+				MaxPrice:   lvl.Price,
+				TotalUSD:   lvl.SizeUsd,
+				Side:       lvl.Side,
+				LevelCount: 1,
+				HasWhale:   lvl.SizeUsd >= 500_000,
 			}
 		}
-		m[k].totalUSD += lvl.SizeUsd
-		m[k].count++
 	}
-	var buckets []priceBucket
-	for _, b := range m {
-		buckets = append(buckets, *b)
+	if current != nil {
+		zones = append(zones, *current)
 	}
-	sort.Slice(buckets, func(i, j int) bool { return buckets[i].totalUSD > buckets[j].totalUSD })
-	return buckets
+	return zones
+}
+
+func zoneSeverity(zone LiquidationZone, distance float64) string {
+	if zone.TotalUSD >= 1_000_000 && distance <= 1.5 {
+		return "high"
+	}
+	if zone.HasWhale && distance <= 1.0 {
+		return "high"
+	}
+	if zone.TotalUSD >= 300_000 && distance <= 3.0 {
+		return "medium"
+	}
+	return ""
 }
 
 func New() *Detector { return &Detector{} }
@@ -148,21 +180,82 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 	}
 
-	// ── Rule 6: Large liquidation cluster ────────────────────────────────────
-	for _, lvl := range snap.LiquidationMap.Levels {
-		if lvl.SizeUsd > 500_000 {
-			roundedPrice := math.Round(lvl.Price/100) * 100
-			id := fmt.Sprintf("liq-cluster-%d", int(roundedPrice))
-			direction := "downward"
-			if lvl.Side == "short" {
-				direction = "upward"
-			}
-			add(id,
-				fmt.Sprintf("Large %s liquidation cluster at $%.0f worth $%.2fM — if price reaches this level, expect accelerated %s move.",
-					lvl.Side, lvl.Price, lvl.SizeUsd/1_000_000, direction),
-				"high",
-			)
+	// ── Zone-based liquidation alerts (replaces old per-level and whale rules) ─
+	zones := aggregateLiquidationZones(snap.LiquidationMap.Levels, snap.LiquidationMap.CurrentPrice)
+	symbol := snap.Symbol
+	for _, zone := range zones {
+		var distanceToZone float64
+		if snap.LiquidationMap.CurrentPrice < zone.MinPrice {
+			distanceToZone = (zone.MinPrice - snap.LiquidationMap.CurrentPrice) / snap.LiquidationMap.CurrentPrice * 100
+		} else if snap.LiquidationMap.CurrentPrice > zone.MaxPrice {
+			distanceToZone = (snap.LiquidationMap.CurrentPrice - zone.MaxPrice) / snap.LiquidationMap.CurrentPrice * 100
+		} else {
+			distanceToZone = 0
 		}
+
+		severity := zoneSeverity(zone, distanceToZone)
+		if severity == "" {
+			continue
+		}
+
+		midPrice := (zone.MinPrice + zone.MaxPrice) / 2
+		zoneID := fmt.Sprintf("%s-zone-%.0f", symbol, math.Round(midPrice/10)*10)
+
+		sizeStr := fmt.Sprintf("$%.2fM", zone.TotalUSD/1_000_000)
+		if zone.TotalUSD < 1_000_000 {
+			sizeStr = fmt.Sprintf("$%.0fk", zone.TotalUSD/1_000)
+		}
+
+		priceRange := fmt.Sprintf("$%.0f", zone.MinPrice)
+		if zone.MaxPrice != zone.MinPrice {
+			priceRange = fmt.Sprintf("$%.0f – $%.0f", zone.MinPrice, zone.MaxPrice)
+		}
+
+		var directionMsg string
+		switch zone.Side {
+		case "long":
+			directionMsg = "Long liquidations — if swept, expect accelerated downward move"
+		case "short":
+			directionMsg = "Short liquidations — if swept, expect accelerated upward move (short squeeze)"
+		case "mixed":
+			directionMsg = "Mixed liquidations — both sides trapped in this zone"
+		default:
+			directionMsg = ""
+		}
+
+		whaleTag := ""
+		if zone.HasWhale {
+			whaleTag = "\n• 🐋 Whale cluster detected"
+		}
+
+		distStr := fmt.Sprintf("%.2f%%", distanceToZone)
+		if distanceToZone < 0.01 {
+			distStr = "at current price"
+		}
+
+		sideTitle := zone.Side
+		if len(zone.Side) > 0 {
+			sideTitle = strings.ToUpper(zone.Side[:1]) + zone.Side[1:]
+		}
+
+		message := fmt.Sprintf(
+			"%s liquidation zone\n%s | %s | %d levels\nDistance: %s\n\n%s%s",
+			sideTitle,
+			priceRange,
+			sizeStr,
+			zone.LevelCount,
+			distStr,
+			directionMsg,
+			whaleTag,
+		)
+
+		out = append(out, models.Alert{
+			ID:        zoneID,
+			Symbol:    symbol,
+			Message:   message,
+			Severity:  severity,
+			Timestamp: now,
+		})
 	}
 
 	// ── Rule 7: Negative funding (low) ────────────────────────────────────────
@@ -173,31 +266,6 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 				rate*100),
 			"low",
 		)
-	}
-
-	// ── Rule 8: Whale cluster detected ─────────────────────────────────────────
-	buckets := groupIntoBuckets(snap.LiquidationMap.Levels, 500.0)
-	for _, b := range buckets {
-		if b.totalUSD >= 2_000_000 {
-			severity := "medium"
-			if b.totalUSD >= 5_000_000 {
-				severity = "high"
-			}
-			direction := "downward"
-			if b.side == "short" {
-				direction = "upward"
-			}
-			id := fmt.Sprintf("whale-%s-%.0f", b.side, b.minPrice)
-			msg := fmt.Sprintf("🐋 Large %s whale cluster near $%.0f: $%.2fM across %d levels — significant %s pressure concentration.",
-				b.side, b.minPrice, b.totalUSD/1_000_000, b.count, direction)
-			out = append(out, models.Alert{
-				ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
-				Symbol:    snap.Symbol,
-				Message:   msg,
-				Severity:  severity,
-				Timestamp: now,
-			})
-		}
 	}
 
 	// ── Rule 9: Short squeeze probability high ─────────────────────────────────
