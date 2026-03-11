@@ -311,6 +311,13 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
 	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
+		magnetRound := 10.0
+		if m.Price < 100 {
+			magnetRound = 1.0
+		} else if m.Price < 1000 {
+			magnetRound = 5.0
+		}
+		roundedMagnetPrice := math.Round(m.Price/magnetRound) * magnetRound
 		fundingCtx := "neutral funding"
 		if snap.FundingRate.Rate < -0.0001 {
 			fundingCtx = "negative funding — shorts vulnerable"
@@ -318,7 +325,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			fundingCtx = "elevated funding — longs vulnerable"
 		}
 		oiCtx := fmt.Sprintf("OI %.1f%% in 24h", snap.OpenInterest.OIChange24h)
-		id := fmt.Sprintf("liq-magnet-%.0f", m.Price)
+		id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
 		out = append(out, models.Alert{
 			ID:       fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:   snap.Symbol,
