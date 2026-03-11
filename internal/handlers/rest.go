@@ -197,7 +197,7 @@ func (h *Handler) GetAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetTickers handles GET /api/tickers?symbols=BTC,ETH,SOL,ARB,DOGE,AVAX
-// Fetches all symbols concurrently and returns []models.TickerInfo.
+// Fetches snapshot for each symbol, runs signal engine, and returns []models.TickerResult.
 func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 	symbolsParam := r.URL.Query().Get("symbols")
 	if symbolsParam == "" {
@@ -208,23 +208,33 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 	symbols := strings.Split(symbolsParam, ",")
 	ctx := r.Context()
 
-	results := make([]models.TickerInfo, len(symbols))
+	results := make([]models.TickerResult, len(symbols))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	engine := signals.New()
 
 	for i, sym := range symbols {
 		wg.Add(1)
 		go func(idx int, symbol string) {
 			defer wg.Done()
 			symbol = strings.TrimSpace(symbol)
-			price, change24h, err := h.aggregator.FetchTicker(ctx, symbol)
+			snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
 			if err != nil {
-				log.Printf("tickers: %v", err)
+				log.Printf("tickers FetchSnapshot %s: %v", symbol, err)
 				return
 			}
+			price, change24h, tickErr := h.aggregator.FetchTicker(ctx, symbol)
+			if tickErr != nil {
+				price = snap.LiquidationMap.CurrentPrice
+			}
+			sigs := engine.Analyze(snap)
+			fg := h.calc.Calculate(snap)
 			mu.Lock()
-			results[idx] = models.TickerInfo{
+			results[idx] = models.TickerResult{
 				Symbol:    symbol,
+				Snapshot:  snap,
+				Signals:   sigs,
+				FearGreed: fg,
 				Price:     price,
 				Change24h: change24h,
 				Timestamp: time.Now().UTC(),
@@ -235,8 +245,7 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 
 	wg.Wait()
 
-	// Filter out zero-value entries from failed fetches.
-	tickers := make([]models.TickerInfo, 0, len(results))
+	tickers := make([]models.TickerResult, 0, len(results))
 	for _, t := range results {
 		if t.Symbol != "" {
 			tickers = append(tickers, t)

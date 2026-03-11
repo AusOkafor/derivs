@@ -187,6 +187,17 @@ type TickerInfo struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// TickerResult is the full compare-page payload: snapshot, signals, fear_greed, and price data.
+type TickerResult struct {
+	Symbol    string             `json:"symbol"`
+	Snapshot  MarketSnapshot     `json:"snapshot"`
+	Signals   MarketSignals      `json:"signals"`
+	FearGreed FearGreedScore     `json:"fear_greed"`
+	Price     float64            `json:"price"`
+	Change24h float64            `json:"change_24h"`
+	Timestamp time.Time          `json:"timestamp"`
+}
+
 type FundingRatePoint struct {
 	Timestamp int64   `json:"timestamp"`
 	Rate      float64 `json:"rate"`
