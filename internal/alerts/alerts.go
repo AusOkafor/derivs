@@ -202,7 +202,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 
 		midPrice := (zone.MinPrice + zone.MaxPrice) / 2
-		zoneID := fmt.Sprintf("%s-zone-%.0f", symbol, math.Round(midPrice/10)*10)
+		zoneID := fmt.Sprintf("%s-zone-%.0f", symbol, math.Round(midPrice/5)*5)
 
 		sizeStr := fmt.Sprintf("$%.2fM", zone.TotalUSD/1_000_000)
 		if zone.TotalUSD < 1_000_000 {
@@ -336,7 +336,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 				fmt.Sscanf(a.ID, symbol+"-zone-%f", &zoneMid)
 				if magnetPrice > 0 {
 					dist := math.Abs(zoneMid-magnetPrice) / magnetPrice * 100
-					if dist <= 0.5 {
+					if dist <= 2.0 {
 						continue
 					}
 				}
