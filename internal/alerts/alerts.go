@@ -326,22 +326,21 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		})
 	}
 
-	// Deduplicate zone vs magnet overlap — suppress zone alert if magnet covers same price
-	if sigs.LiquidationMagnet != nil {
-		magnetPrice := sigs.LiquidationMagnet.Price
+	// If a liq-magnet alert exists for this symbol, remove ALL zone alerts
+	// since the magnet alert already covers the most significant zone
+	hasMagnetAlert := false
+	for _, a := range out {
+		if strings.HasPrefix(a.ID, symbol+"-liq-magnet-") {
+			hasMagnetAlert = true
+			break
+		}
+	}
+	if hasMagnetAlert {
 		filtered := out[:0]
 		for _, a := range out {
-			if strings.HasPrefix(a.ID, symbol+"-zone-") {
-				var zoneMid float64
-				fmt.Sscanf(a.ID, symbol+"-zone-%f", &zoneMid)
-				if magnetPrice > 0 {
-					dist := math.Abs(zoneMid-magnetPrice) / magnetPrice * 100
-					if dist <= 2.0 {
-						continue
-					}
-				}
+			if !strings.HasPrefix(a.ID, symbol+"-zone-") {
+				filtered = append(filtered, a)
 			}
-			filtered = append(filtered, a)
 		}
 		out = filtered
 	}
