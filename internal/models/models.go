@@ -109,6 +109,26 @@ const (
 	OITrendLongLiquidation OITrend = "Long liquidation — deleveraging"
 )
 
+// GravityLevel holds a single liquidation level with its gravitational weight
+type GravityLevel struct {
+	Price   float64 `json:"price"`
+	SizeUSD float64 `json:"size_usd"`
+	Side    string  `json:"side"`
+	Weight  float64 `json:"weight"` // size / distance²
+}
+
+// LiquidityGravity represents directional pull from liquidation clusters
+type LiquidityGravity struct {
+	UpwardPull     float64        `json:"upward_pull"`
+	DownwardPull   float64        `json:"downward_pull"`
+	UpwardTarget   float64        `json:"upward_target"`
+	DownwardTarget float64        `json:"downward_target"`
+	UpwardSize     float64        `json:"upward_size"`
+	DownwardSize   float64        `json:"downward_size"`
+	Dominant       string         `json:"dominant"` // "upward", "downward", or "neutral"
+	Levels         []GravityLevel `json:"levels"`
+}
+
 // LiquidationMagnet represents a nearby liquidation cluster that may attract price
 type LiquidationMagnet struct {
 	Side        string  `json:"side"`        // "long" or "short"
@@ -127,8 +147,9 @@ type MarketSignals struct {
 	ShortSqueezeProbability int             `json:"short_squeeze_probability"` // 0-100
 	LongSqueezeProbability  int             `json:"long_squeeze_probability"`  // 0-100
 	LiquidationMagnet      *LiquidationMagnet `json:"liquidation_magnet,omitempty"`
-	LeverageImbalance      string           `json:"leverage_imbalance"` // "Longs overcrowded" / "Shorts overcrowded" / "Balanced"
-	SqueezeDirection       string           `json:"squeeze_direction"`  // "Long squeeze risk" / "Short squeeze risk" / "None"
+	LiquidityGravity       LiquidityGravity  `json:"liquidity_gravity"`
+	LeverageImbalance      string             `json:"leverage_imbalance"` // "Longs overcrowded" / "Shorts overcrowded" / "Balanced"
+	SqueezeDirection       string             `json:"squeeze_direction"`  // "Long squeeze risk" / "Short squeeze risk" / "None"
 }
 
 type SnapshotWithAnalysis struct {

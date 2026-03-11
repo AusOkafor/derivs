@@ -2,6 +2,7 @@ package signals
 
 import (
 	"math"
+	"sort"
 
 	"derivs-backend/internal/models"
 )
@@ -23,10 +24,10 @@ func (e *Engine) Analyze(snap models.MarketSnapshot) models.MarketSignals {
 	// 3. Squeeze Probabilities
 	sig.ShortSqueezeProbability, sig.LongSqueezeProbability = calcSqueezeProbability(snap)
 
-	// 4. Leverage Imbalance
+	// 5. Leverage Imbalance
 	sig.LeverageImbalance = detectLeverageImbalance(snap)
 
-	// 5. Market Regime (depends on all above)
+	// 6. Market Regime (depends on all above)
 	sig.Regime, sig.RegimeConfidence = detectRegime(snap, sig)
 
 	return sig
@@ -109,6 +110,97 @@ func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagn
 		SizeUSD:     best.lvl.SizeUsd,
 		Distance:    best.distance,
 		Probability: prob,
+	}
+}
+
+func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
+	currentPrice := snap.LiquidationMap.CurrentPrice
+	if currentPrice == 0 {
+		return models.LiquidityGravity{}
+	}
+
+	var upwardWeight, downwardWeight float64
+	var upwardTarget, downwardTarget float64
+	var upwardSize, downwardSize float64
+	var bestUpWeight, bestDownWeight float64
+	var gravityLevels []models.GravityLevel
+
+	for _, lvl := range snap.LiquidationMap.Levels {
+		if lvl.SizeUsd < 10_000 {
+			continue
+		}
+		distance := math.Abs(lvl.Price-currentPrice) / currentPrice * 100
+		if distance < 0.0001 {
+			distance = 0.0001
+		}
+
+		weight := lvl.SizeUsd / (distance * distance)
+
+		gravityLevels = append(gravityLevels, models.GravityLevel{
+			Price:   lvl.Price,
+			SizeUSD: lvl.SizeUsd,
+			Side:    lvl.Side,
+			Weight:  weight,
+		})
+
+		if lvl.Price > currentPrice {
+			pullMultiplier := 1.0
+			if lvl.Side == "short" {
+				pullMultiplier = 1.5
+			}
+			upwardWeight += weight * pullMultiplier
+			upwardSize += lvl.SizeUsd
+			if weight*pullMultiplier > bestUpWeight {
+				bestUpWeight = weight * pullMultiplier
+				upwardTarget = lvl.Price
+			}
+		} else {
+			pullMultiplier := 1.0
+			if lvl.Side == "long" {
+				pullMultiplier = 1.5
+			}
+			downwardWeight += weight * pullMultiplier
+			downwardSize += lvl.SizeUsd
+			if weight*pullMultiplier > bestDownWeight {
+				bestDownWeight = weight * pullMultiplier
+				downwardTarget = lvl.Price
+			}
+		}
+	}
+
+	total := upwardWeight + downwardWeight
+	if total == 0 {
+		return models.LiquidityGravity{
+			UpwardPull:   50,
+			DownwardPull: 50,
+			Dominant:     "neutral",
+		}
+	}
+
+	upPct := upwardWeight / total * 100
+	downPct := downwardWeight / total * 100
+
+	dominant := "upward"
+	if downPct > upPct {
+		dominant = "downward"
+	}
+
+	sort.Slice(gravityLevels, func(i, j int) bool {
+		return gravityLevels[i].Weight > gravityLevels[j].Weight
+	})
+	if len(gravityLevels) > 5 {
+		gravityLevels = gravityLevels[:5]
+	}
+
+	return models.LiquidityGravity{
+		UpwardPull:     math.Round(upPct*10) / 10,
+		DownwardPull:   math.Round(downPct*10) / 10,
+		UpwardTarget:   upwardTarget,
+		DownwardTarget: downwardTarget,
+		UpwardSize:     upwardSize,
+		DownwardSize:   downwardSize,
+		Dominant:       dominant,
+		Levels:         gravityLevels,
 	}
 }
 

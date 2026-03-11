@@ -123,6 +123,11 @@ SHORT SQUEEZE PROBABILITY: %d%%
 LONG SQUEEZE PROBABILITY: %d%%
 %s
 
+LIQUIDITY GRAVITY:
+↑ Upward pull: %.1f%% toward $%.0f ($%.2fM)
+↓ Downward pull: %.1f%% toward $%.0f ($%.2fM)
+Dominant direction: %s
+
 RAW DATA:
 Funding Rate: %.4f%%
 Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
@@ -148,6 +153,13 @@ Respond ONLY with a valid JSON object, no markdown, no explanation:
 		sigs.ShortSqueezeProbability,
 		sigs.LongSqueezeProbability,
 		formatMagnet(sigs.LiquidationMagnet),
+		sigs.LiquidityGravity.UpwardPull,
+		sigs.LiquidityGravity.UpwardTarget,
+		sigs.LiquidityGravity.UpwardSize/1_000_000,
+		sigs.LiquidityGravity.DownwardPull,
+		sigs.LiquidityGravity.DownwardTarget,
+		sigs.LiquidityGravity.DownwardSize/1_000_000,
+		sigs.LiquidityGravity.Dominant,
 		snap.FundingRate.Rate*100,
 		snap.OpenInterest.OIUsd/1_000_000,
 		snap.OpenInterest.OIChange1h,
