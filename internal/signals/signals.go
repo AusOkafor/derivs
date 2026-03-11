@@ -54,37 +54,48 @@ func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagn
 		return nil
 	}
 
-	levels := snap.LiquidationMap.Levels
-	var largest *models.LiquidationLevel
-	for i := range levels {
-		lvl := &levels[i]
+	// Score = size_usd / distance% — prevents small nearby clusters from triggering
+	// Minimum size: $50,000 to be considered
+	type candidate struct {
+		lvl      models.LiquidationLevel
+		distance float64
+		score    float64
+	}
+
+	var best *candidate
+	for _, lvl := range snap.LiquidationMap.Levels {
+		if lvl.SizeUsd < 50_000 {
+			continue
+		}
 		distance := math.Abs(lvl.Price-currentPrice) / currentPrice * 100
-		if distance <= 3.0 {
-			if largest == nil || lvl.SizeUsd > largest.SizeUsd {
-				largest = lvl
-			}
+		if distance > 3.0 || distance < 0.00001 {
+			continue
+		}
+		score := lvl.SizeUsd / math.Max(distance, 0.01)
+		if best == nil || score > best.score {
+			best = &candidate{lvl: lvl, distance: distance, score: score}
 		}
 	}
 
-	if largest == nil || largest.SizeUsd < 100_000 {
+	if best == nil {
 		return nil
 	}
 
-	distance := math.Abs(largest.Price-currentPrice) / currentPrice * 100
-
-	// Probability model:
-	// Base: 50% if within 3%
-	// +10% for each 0.5% closer
-	// +15% if funding confirms direction
-	// +10% if OI expanding
-	prob := 50
-	prob += int((3.0 - distance) / 0.5 * 10)
-	if largest.Side == "short" && snap.FundingRate.Rate < 0 {
-		prob += 15 // negative funding + short cluster = squeeze up likely
+	// Probability model — weighted by size and proximity
+	prob := 40 // base
+	// Size contribution (up to +30)
+	sizeScore := int(math.Min(best.lvl.SizeUsd/100_000, 3) * 10)
+	prob += sizeScore
+	// Proximity contribution (up to +20)
+	prob += int((3.0 - best.distance) / 3.0 * 20)
+	// Funding confirms direction (+15)
+	if best.lvl.Side == "short" && snap.FundingRate.Rate < 0 {
+		prob += 15
 	}
-	if largest.Side == "long" && snap.FundingRate.Rate > 0.0003 {
-		prob += 15 // high positive funding + long cluster = squeeze down likely
+	if best.lvl.Side == "long" && snap.FundingRate.Rate > 0.0003 {
+		prob += 15
 	}
+	// OI expanding adds conviction (+10)
 	if math.Abs(snap.OpenInterest.OIChange1h) > 1.5 {
 		prob += 10
 	}
@@ -93,35 +104,44 @@ func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagn
 	}
 
 	return &models.LiquidationMagnet{
-		Side:        largest.Side,
-		Price:       largest.Price,
-		SizeUSD:     largest.SizeUsd,
-		Distance:    distance,
+		Side:        best.lvl.Side,
+		Price:       best.lvl.Price,
+		SizeUSD:     best.lvl.SizeUsd,
+		Distance:    best.distance,
 		Probability: prob,
 	}
 }
 
 func calcSqueezeProbability(snap models.MarketSnapshot) (shortSqueeze, longSqueeze int) {
+	avgLong := avgLongPct(snap.LongShortRatios)
+	rate := snap.FundingRate.Rate
+
+	// SHORT SQUEEZE score (shorts trapped, price could spike up)
 	shortScore := 0
-	if snap.FundingRate.Rate < -0.0001 {
-		shortScore += 25
+	if rate < 0 {
+		shortScore += 20
 	}
-	if snap.FundingRate.Rate < -0.0003 {
+	if rate < -0.0001 {
 		shortScore += 15
 	}
-	avgLong := avgLongPct(snap.LongShortRatios)
+	if rate < -0.0003 {
+		shortScore += 10
+	}
+	if avgLong < 50 {
+		shortScore += 15
+	}
 	if avgLong < 45 {
-		shortScore += 20
+		shortScore += 10
 	}
-	if snap.OpenInterest.OIChange1h > 1.0 {
-		shortScore += 20
+	if snap.OpenInterest.OIChange1h > 0.5 {
+		shortScore += 10
 	}
-	if snap.OpenInterest.OIChange24h < -3.0 {
+	if snap.OpenInterest.OIChange24h < -3 {
 		shortScore += 10
 	}
 	for _, lvl := range snap.LiquidationMap.Levels {
-		if lvl.Side == "short" && lvl.Price > snap.LiquidationMap.CurrentPrice && lvl.SizeUsd > 200_000 {
-			shortScore += 10
+		if lvl.Side == "short" && lvl.Price > snap.LiquidationMap.CurrentPrice && lvl.SizeUsd > 100_000 {
+			shortScore += 15
 			break
 		}
 	}
@@ -129,25 +149,32 @@ func calcSqueezeProbability(snap models.MarketSnapshot) (shortSqueeze, longSquee
 		shortScore = 95
 	}
 
+	// LONG SQUEEZE score (longs trapped, price could drop)
 	longScore := 0
-	if snap.FundingRate.Rate > 0.0003 {
-		longScore += 25
+	if rate > 0.0001 {
+		longScore += 20
 	}
-	if snap.FundingRate.Rate > 0.0005 {
+	if rate > 0.0003 {
+		longScore += 15
+	}
+	if rate > 0.0005 {
+		longScore += 10
+	}
+	if avgLong > 60 {
 		longScore += 15
 	}
 	if avgLong > 65 {
-		longScore += 20
-	}
-	if avgLong > 72 {
 		longScore += 10
 	}
-	if snap.OpenInterest.OIChange1h > 2.0 {
-		longScore += 15
+	if snap.OpenInterest.OIChange1h > 1.0 {
+		longScore += 10
+	}
+	if snap.OpenInterest.OIChange24h < -3 {
+		longScore += 10
 	}
 	for _, lvl := range snap.LiquidationMap.Levels {
-		if lvl.Side == "long" && lvl.Price < snap.LiquidationMap.CurrentPrice && lvl.SizeUsd > 200_000 {
-			longScore += 10
+		if lvl.Side == "long" && lvl.Price < snap.LiquidationMap.CurrentPrice && lvl.SizeUsd > 100_000 {
+			longScore += 15
 			break
 		}
 	}

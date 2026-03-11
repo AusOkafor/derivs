@@ -225,14 +225,21 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	}
 
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
-	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 70 {
+	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
+		fundingCtx := "neutral funding"
+		if snap.FundingRate.Rate < -0.0001 {
+			fundingCtx = "negative funding — shorts vulnerable"
+		} else if snap.FundingRate.Rate > 0.0003 {
+			fundingCtx = "elevated funding — longs vulnerable"
+		}
+		oiCtx := fmt.Sprintf("OI %.1f%% in 24h", snap.OpenInterest.OIChange24h)
 		id := fmt.Sprintf("liq-magnet-%.0f", m.Price)
 		out = append(out, models.Alert{
-			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
-			Symbol:    snap.Symbol,
-			Message:   fmt.Sprintf("Liquidity magnet detected: large %s cluster at $%.0f (%.1f%% away). %d%% probability of price sweep toward this level.", m.Side, m.Price, m.Distance, m.Probability),
-			Severity:  "high",
+			ID:       fmt.Sprintf("%s-%s", snap.Symbol, id),
+			Symbol:   snap.Symbol,
+			Message:  fmt.Sprintf("Liquidity sweep alert: large %s cluster at $%.0f (%.2f%% away)\n\nMarket context:\n• %s\n• %s\n• %s\n\nSweep probability: %d%%", m.Side, m.Price, m.Distance, fundingCtx, oiCtx, sigs.LeverageImbalance, m.Probability),
+			Severity: "high",
 			Timestamp: now,
 		})
 	}
