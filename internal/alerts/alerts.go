@@ -5,9 +5,17 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"derivs-backend/internal/models"
+)
+
+var (
+	magnetCooldown   = map[string]time.Time{}
+	magnetCooldownMu sync.Mutex
+	regimeCooldown   = map[string]time.Time{}
+	regimeCooldownMu sync.Mutex
 )
 
 type Detector struct{}
@@ -326,24 +334,45 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 		oiCtx := fmt.Sprintf("OI %.1f%% in 24h", snap.OpenInterest.OIChange24h)
 		id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
-		out = append(out, models.Alert{
-			ID:       fmt.Sprintf("%s-%s", snap.Symbol, id),
-			Symbol:   snap.Symbol,
-			Message:  fmt.Sprintf("Liquidity sweep alert: large %s cluster at %s (%.2f%% away)\n\nMarket context:\n• %s\n• %s\n• %s\n\nSweep probability: %d%%", m.Side, formatPrice(m.Price), m.Distance, fundingCtx, oiCtx, sigs.LeverageImbalance, m.Probability),
-			Severity: "high",
-			Timestamp: now,
-		})
+
+		magnetCooldownMu.Lock()
+		lastFired, exists := magnetCooldown[symbol]
+		cooldownActive := exists && time.Since(lastFired) < 30*time.Minute
+		if !cooldownActive {
+			magnetCooldown[symbol] = time.Now()
+		}
+		magnetCooldownMu.Unlock()
+
+		if !cooldownActive {
+			out = append(out, models.Alert{
+				ID:       fmt.Sprintf("%s-%s", snap.Symbol, id),
+				Symbol:   snap.Symbol,
+				Message:  fmt.Sprintf("Liquidity sweep alert: large %s cluster at %s (%.2f%% away)\n\nMarket context:\n• %s\n• %s\n• %s\n\nSweep probability: %d%%", m.Side, formatPrice(m.Price), m.Distance, fundingCtx, oiCtx, sigs.LeverageImbalance, m.Probability),
+				Severity: "high",
+				Timestamp: now,
+			})
+		}
 	}
 
 	// ── Rule 12: Market regime change to Liquidation Event ──────────────────────
 	if sigs.Regime == models.RegimeLiquidation {
-		out = append(out, models.Alert{
-			ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
-			Symbol:    snap.Symbol,
-			Message:   "Market regime: Liquidation Event detected. OI dropping sharply — forced position closures underway. Potential local top/bottom forming.",
-			Severity:  "high",
-			Timestamp: now,
-		})
+		regimeCooldownMu.Lock()
+		lastFired, exists := regimeCooldown[symbol]
+		cooldownActive := exists && time.Since(lastFired) < 60*time.Minute
+		if !cooldownActive {
+			regimeCooldown[symbol] = time.Now()
+		}
+		regimeCooldownMu.Unlock()
+
+		if !cooldownActive {
+			out = append(out, models.Alert{
+				ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
+				Symbol:    snap.Symbol,
+				Message:   "Market regime: Liquidation Event detected. OI dropping sharply — forced position closures underway. Potential local top/bottom forming.",
+				Severity:  "high",
+				Timestamp: now,
+			})
+		}
 	}
 
 	// If a liq-magnet alert exists for this symbol, remove ALL zone alerts
