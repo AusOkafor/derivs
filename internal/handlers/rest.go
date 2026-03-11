@@ -71,14 +71,17 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		log.Printf("GetSnapshot: snapshot symbol mismatch: requested %s, got %s", symbol, snap.Symbol)
 	}
 
-	// Analyze always returns a usable value (fallback on error); only runs Claude for pro tier.
-	ai, _ := h.analyzer.Analyze(ctx, snap, tier)
+	engine := signals.New()
+	sigs := engine.Analyze(snap)
+
+	ai, _ := h.analyzer.Analyze(ctx, snap, sigs, tier)
 
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
 		Analysis:  ai,
-		Alerts:    h.detector.Analyze(snap),
+		Alerts:    h.detector.Analyze(snap, sigs),
 		FearGreed: h.calc.Calculate(snap),
+		Signals:   sigs,
 	}
 
 	if username == "" {
