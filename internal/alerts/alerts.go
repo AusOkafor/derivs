@@ -16,6 +16,10 @@ var (
 	magnetCooldownMu sync.Mutex
 	regimeCooldown   = map[string]time.Time{}
 	regimeCooldownMu sync.Mutex
+	zoneCooldown     = map[string]time.Time{}
+	zoneCooldownMu   sync.Mutex
+	squeezeCooldown  = map[string]time.Time{}
+	squeezeCooldownMu sync.Mutex
 )
 
 type Detector struct{}
@@ -207,7 +211,17 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Zone-based liquidation alerts (replaces old per-level and whale rules) ─
 	zones := aggregateLiquidationZones(snap.LiquidationMap.Levels, snap.LiquidationMap.CurrentPrice)
 	symbol := snap.Symbol
-	for _, zone := range zones {
+
+	zoneCooldownMu.Lock()
+	lastZone, zoneExists := zoneCooldown[symbol]
+	zoneCooldownActive := zoneExists && time.Since(lastZone) < 30*time.Minute
+	if !zoneCooldownActive {
+		zoneCooldown[symbol] = time.Now()
+	}
+	zoneCooldownMu.Unlock()
+
+	if !zoneCooldownActive {
+		for _, zone := range zones {
 		var distanceToZone float64
 		if snap.LiquidationMap.CurrentPrice < zone.MinPrice {
 			distanceToZone = (zone.MinPrice - snap.LiquidationMap.CurrentPrice) / snap.LiquidationMap.CurrentPrice * 100
@@ -280,6 +294,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			Severity:  severity,
 			Timestamp: now,
 		})
+		}
 	}
 
 	// ── Rule 7: Negative funding (low) ────────────────────────────────────────
@@ -294,26 +309,46 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 
 	// ── Rule 9: Short squeeze probability high ─────────────────────────────────
 	if sigs.ShortSqueezeProbability >= 65 {
-		id := fmt.Sprintf("short-squeeze-%d", sigs.ShortSqueezeProbability/10*10)
-		out = append(out, models.Alert{
-			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
-			Symbol:    snap.Symbol,
-			Message:   fmt.Sprintf("Short squeeze probability at %d%% — negative funding, shorts overcrowded, liquidation clusters above price. Watch for rapid upward move.", sigs.ShortSqueezeProbability),
-			Severity:  "high",
-			Timestamp: now,
-		})
+		squeezeCooldownMu.Lock()
+		lastSq, sqExists := squeezeCooldown[symbol]
+		squeezeCooldownActive := sqExists && time.Since(lastSq) < 30*time.Minute
+		if !squeezeCooldownActive {
+			squeezeCooldown[symbol] = time.Now()
+		}
+		squeezeCooldownMu.Unlock()
+
+		if !squeezeCooldownActive {
+			id := fmt.Sprintf("short-squeeze-%d", sigs.ShortSqueezeProbability/10*10)
+			out = append(out, models.Alert{
+				ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
+				Symbol:    snap.Symbol,
+				Message:   fmt.Sprintf("Short squeeze probability at %d%% — negative funding, shorts overcrowded, liquidation clusters above price. Watch for rapid upward move.", sigs.ShortSqueezeProbability),
+				Severity:  "high",
+				Timestamp: now,
+			})
+		}
 	}
 
 	// ── Rule 10: Long squeeze probability high ──────────────────────────────────
 	if sigs.LongSqueezeProbability >= 65 {
-		id := fmt.Sprintf("long-squeeze-%d", sigs.LongSqueezeProbability/10*10)
-		out = append(out, models.Alert{
-			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
-			Symbol:    snap.Symbol,
-			Message:   fmt.Sprintf("Long squeeze probability at %d%% — elevated funding, longs overcrowded, liquidation clusters below price. Watch for rapid downward move.", sigs.LongSqueezeProbability),
-			Severity:  "high",
-			Timestamp: now,
-		})
+		squeezeCooldownMu.Lock()
+		lastSq, sqExists := squeezeCooldown[symbol]
+		squeezeCooldownActive := sqExists && time.Since(lastSq) < 30*time.Minute
+		if !squeezeCooldownActive {
+			squeezeCooldown[symbol] = time.Now()
+		}
+		squeezeCooldownMu.Unlock()
+
+		if !squeezeCooldownActive {
+			id := fmt.Sprintf("long-squeeze-%d", sigs.LongSqueezeProbability/10*10)
+			out = append(out, models.Alert{
+				ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
+				Symbol:    snap.Symbol,
+				Message:   fmt.Sprintf("Long squeeze probability at %d%% — elevated funding, longs overcrowded, liquidation clusters below price. Watch for rapid downward move.", sigs.LongSqueezeProbability),
+				Severity:  "high",
+				Timestamp: now,
+			})
+		}
 	}
 
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
