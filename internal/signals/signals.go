@@ -116,7 +116,7 @@ func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagn
 func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 	currentPrice := snap.LiquidationMap.CurrentPrice
 	if currentPrice == 0 {
-		return models.LiquidityGravity{}
+		return models.LiquidityGravity{Dominant: "neutral", UpwardPull: 50, DownwardPull: 50}
 	}
 
 	var upwardWeight, downwardWeight float64
@@ -129,22 +129,15 @@ func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 		if lvl.SizeUsd < 10_000 {
 			continue
 		}
-		distance := math.Abs(lvl.Price-currentPrice) / currentPrice * 100
-		if distance < 0.0001 {
-			distance = 0.0001
-		}
 
-		weight := lvl.SizeUsd / (distance * distance)
+		// Use linear weight (size only) — distance is too small for distance² model
+		// with tight orderbook data
+		weight := lvl.SizeUsd
 
-		gravityLevels = append(gravityLevels, models.GravityLevel{
-			Price:   lvl.Price,
-			SizeUSD: lvl.SizeUsd,
-			Side:    lvl.Side,
-			Weight:  weight,
-		})
-
+		// Side multiplier: short clusters above = stronger upward pull (market hunts them)
+		// long clusters below = stronger downward pull
+		pullMultiplier := 1.0
 		if lvl.Price > currentPrice {
-			pullMultiplier := 1.0
 			if lvl.Side == "short" {
 				pullMultiplier = 1.5
 			}
@@ -155,7 +148,6 @@ func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 				upwardTarget = lvl.Price
 			}
 		} else {
-			pullMultiplier := 1.0
 			if lvl.Side == "long" {
 				pullMultiplier = 1.5
 			}
@@ -166,14 +158,21 @@ func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 				downwardTarget = lvl.Price
 			}
 		}
+
+		gravityLevels = append(gravityLevels, models.GravityLevel{
+			Price:   lvl.Price,
+			SizeUSD: lvl.SizeUsd,
+			Side:    lvl.Side,
+			Weight:  weight * pullMultiplier,
+		})
 	}
 
 	total := upwardWeight + downwardWeight
 	if total == 0 {
 		return models.LiquidityGravity{
+			Dominant:     "neutral",
 			UpwardPull:   50,
 			DownwardPull: 50,
-			Dominant:     "neutral",
 		}
 	}
 
