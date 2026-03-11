@@ -128,6 +128,11 @@ LIQUIDITY GRAVITY:
 ↓ Downward pull: %.1f%% toward $%.0f ($%.2fM)
 Dominant direction: %s
 
+VOLATILITY:
+State: %s (Score: %d/100)
+Expected Move: %s
+Triggers: %s
+
 RAW DATA:
 Funding Rate: %.4f%%
 Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
@@ -160,6 +165,10 @@ Respond ONLY with a valid JSON object, no markdown, no explanation:
 		sigs.LiquidityGravity.DownwardTarget,
 		sigs.LiquidityGravity.DownwardSize/1_000_000,
 		sigs.LiquidityGravity.Dominant,
+		sigs.Volatility.State,
+		sigs.Volatility.Score,
+		sigs.Volatility.ExpectedMove,
+		strings.Join(sigs.Volatility.Triggers, ", "),
 		snap.FundingRate.Rate*100,
 		snap.OpenInterest.OIUsd/1_000_000,
 		snap.OpenInterest.OIChange1h,

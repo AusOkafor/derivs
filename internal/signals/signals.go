@@ -1,6 +1,7 @@
 package signals
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -30,7 +31,10 @@ func (e *Engine) Analyze(snap models.MarketSnapshot) models.MarketSignals {
 	// 5. Leverage Imbalance
 	sig.LeverageImbalance = detectLeverageImbalance(snap)
 
-	// 6. Market Regime
+	// 6. Volatility Expansion
+	sig.Volatility = calcVolatilityExpansion(snap)
+
+	// 7. Market Regime
 	sig.Regime, sig.RegimeConfidence = detectRegime(snap, sig)
 
 	return sig
@@ -319,6 +323,112 @@ func detectRegime(snap models.MarketSnapshot, sig models.MarketSignals) (models.
 
 	// Default: Ranging
 	return models.RegimeRanging, 50
+}
+
+func calcVolatilityExpansion(snap models.MarketSnapshot) models.VolatilityExpansion {
+	score := 0
+	var triggers []string
+
+	// Signal 1 — OI expanding rapidly (new leverage entering)
+	if snap.OpenInterest.OIChange1h > 2.0 {
+		score += 25
+		triggers = append(triggers, fmt.Sprintf("OI spiking +%.1f%% in 1h", snap.OpenInterest.OIChange1h))
+	} else if snap.OpenInterest.OIChange1h > 1.0 {
+		score += 15
+		triggers = append(triggers, fmt.Sprintf("OI rising +%.1f%% in 1h", snap.OpenInterest.OIChange1h))
+	}
+
+	// Signal 2 — OI collapsing (liquidation cascade underway)
+	if snap.OpenInterest.OIChange1h < -2.0 {
+		score += 30
+		triggers = append(triggers, fmt.Sprintf("OI collapsing %.1f%% in 1h — liquidation cascade risk", snap.OpenInterest.OIChange1h))
+	} else if snap.OpenInterest.OIChange1h < -1.0 {
+		score += 15
+		triggers = append(triggers, fmt.Sprintf("OI dropping %.1f%% in 1h", snap.OpenInterest.OIChange1h))
+	}
+
+	// Signal 3 — Extreme funding (over-leveraged market)
+	absRate := math.Abs(snap.FundingRate.Rate)
+	if absRate > 0.0005 {
+		score += 25
+		triggers = append(triggers, fmt.Sprintf("Extreme funding rate %.4f%% — market over-leveraged", snap.FundingRate.Rate*100))
+	} else if absRate > 0.0003 {
+		score += 15
+		triggers = append(triggers, fmt.Sprintf("Elevated funding rate %.4f%%", snap.FundingRate.Rate*100))
+	}
+
+	// Signal 4 — Funding and OI divergence (dangerous setup)
+	if snap.OpenInterest.OIChange1h > 1.0 && snap.FundingRate.Rate < -0.0002 {
+		score += 20
+		triggers = append(triggers, "OI rising + negative funding — aggressive short positioning")
+	}
+	if snap.OpenInterest.OIChange1h > 1.0 && snap.FundingRate.Rate > 0.0004 {
+		score += 20
+		triggers = append(triggers, "OI rising + high positive funding — aggressive long positioning")
+	}
+
+	// Signal 5 — Crowded positioning (one side dominates)
+	avgLong := avgLongPct(snap.LongShortRatios)
+	if avgLong > 70 || avgLong < 30 {
+		score += 20
+		triggers = append(triggers, fmt.Sprintf("Positioning extremely crowded — %.1f%% longs", avgLong))
+	} else if avgLong > 65 || avgLong < 35 {
+		score += 10
+		triggers = append(triggers, fmt.Sprintf("Positioning crowded — %.1f%% longs", avgLong))
+	}
+
+	// Signal 6 — Large liquidation cluster at current price
+	currentPrice := snap.LiquidationMap.CurrentPrice
+	if currentPrice > 0 {
+		for _, lvl := range snap.LiquidationMap.Levels {
+			dist := math.Abs(lvl.Price-currentPrice) / currentPrice * 100
+			if dist < 0.5 && lvl.SizeUsd > 200_000 {
+				score += 20
+				triggers = append(triggers, fmt.Sprintf("Large $%.0fk liquidation cluster within 0.5%% of price", lvl.SizeUsd/1000))
+				break
+			}
+		}
+	}
+
+	if score > 100 {
+		score = 100
+	}
+
+	// Determine state
+	var state models.VolatilityState
+	var expectedMove string
+
+	oiChanging := math.Abs(snap.OpenInterest.OIChange1h) > 1.0
+
+	switch {
+	case score >= 70:
+		state = models.VolStateExpanding
+		expectedMove = "High"
+	case score >= 50:
+		if oiChanging {
+			state = models.VolStateExpanding
+		} else {
+			state = models.VolStateElevated
+		}
+		expectedMove = "Medium"
+	case score >= 30:
+		state = models.VolStateElevated
+		expectedMove = "Medium"
+	case absRate < 0.0001 && math.Abs(snap.OpenInterest.OIChange1h) < 0.3:
+		state = models.VolStateCompressed
+		expectedMove = "Low — compression often precedes breakout"
+	default:
+		state = models.VolStateContracting
+		expectedMove = "Low"
+	}
+
+	return models.VolatilityExpansion{
+		State:         state,
+		Score:         score,
+		ExpansionProb: score,
+		Triggers:      triggers,
+		ExpectedMove:  expectedMove,
+	}
 }
 
 func avgLongPct(ratios []models.LongShortRatio) float64 {

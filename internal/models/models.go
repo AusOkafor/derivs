@@ -129,6 +129,25 @@ type LiquidityGravity struct {
 	Levels         []GravityLevel `json:"levels"`
 }
 
+// VolatilityState represents the current volatility regime
+type VolatilityState string
+
+const (
+	VolStateExpanding   VolatilityState = "Expanding"
+	VolStateContracting VolatilityState = "Contracting"
+	VolStateElevated    VolatilityState = "Elevated"
+	VolStateCompressed  VolatilityState = "Compressed"
+)
+
+// VolatilityExpansion predicts likelihood of volatility expansion
+type VolatilityExpansion struct {
+	State         VolatilityState `json:"state"`
+	Score         int             `json:"score"`          // 0-100
+	ExpansionProb int             `json:"expansion_prob"`  // % chance of volatility expansion
+	Triggers      []string        `json:"triggers"`       // reasons e.g. "OI spike", "Funding divergence"
+	ExpectedMove  string          `json:"expected_move"`   // "High", "Medium", "Low"
+}
+
 // LiquidationMagnet represents a nearby liquidation cluster that may attract price
 type LiquidationMagnet struct {
 	Side        string  `json:"side"`        // "long" or "short"
@@ -148,6 +167,7 @@ type MarketSignals struct {
 	LongSqueezeProbability  int             `json:"long_squeeze_probability"`  // 0-100
 	LiquidationMagnet      *LiquidationMagnet `json:"liquidation_magnet,omitempty"`
 	LiquidityGravity       LiquidityGravity  `json:"liquidity_gravity"`
+	Volatility             VolatilityExpansion `json:"volatility"`
 	LeverageImbalance      string             `json:"leverage_imbalance"` // "Longs overcrowded" / "Shorts overcrowded" / "Balanced"
 	SqueezeDirection       string             `json:"squeeze_direction"`  // "Long squeeze risk" / "Short squeeze risk" / "None"
 }
