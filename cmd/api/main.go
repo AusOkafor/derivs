@@ -40,11 +40,11 @@ func main() {
 	go wrk.Start(ctx)
 
 	var billingClient *billing.StripeClient
-	if cfg.StripeSecretKey != "" && cfg.StripeProPriceID != "" && cfg.StripeWebhookSecret != "" {
-		billingClient = billing.New(cfg.StripeSecretKey, cfg.StripeProPriceID, cfg.StripeWebhookSecret)
+	if cfg.StripeSecretKey != "" && cfg.StripeWebhookSecret != "" && (cfg.StripePriceIDBasic != "" || cfg.StripePriceIDPro != "") {
+		billingClient = billing.New(cfg.StripeSecretKey, cfg.StripeWebhookSecret)
 	}
 
-	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, cfg.AdminSecret)
+	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, cfg.AdminSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro)
 	hub := handlers.NewHub(h)
 
 	mux := http.NewServeMux()

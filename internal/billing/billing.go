@@ -15,23 +15,21 @@ import (
 // StripeClient wraps Stripe operations.
 type StripeClient struct {
 	secretKey     string
-	priceID       string
 	webhookSecret string
 }
 
 // New creates a StripeClient.
-func New(secretKey, priceID, webhookSecret string) *StripeClient {
+func New(secretKey, webhookSecret string) *StripeClient {
 	return &StripeClient{
 		secretKey:     secretKey,
-		priceID:       priceID,
 		webhookSecret: webhookSecret,
 	}
 }
 
 // CreateCheckoutSession creates a Stripe checkout session for subscription.
-// Returns the session URL.
-func (s *StripeClient) CreateCheckoutSession(telegramUsername string) (string, error) {
-	if s.secretKey == "" || s.priceID == "" {
+// priceID is the Stripe price ID (basic or pro). plan is stored in metadata for webhook tier resolution.
+func (s *StripeClient) CreateCheckoutSession(telegramUsername, priceID, plan string) (string, error) {
+	if s.secretKey == "" || priceID == "" {
 		return "", fmt.Errorf("billing: Stripe not configured")
 	}
 	stripe.Key = s.secretKey
@@ -40,7 +38,7 @@ func (s *StripeClient) CreateCheckoutSession(telegramUsername string) (string, e
 		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{
-				Price:    stripe.String(s.priceID),
+				Price:    stripe.String(priceID),
 				Quantity: stripe.Int64(1),
 			},
 		},
@@ -48,6 +46,7 @@ func (s *StripeClient) CreateCheckoutSession(telegramUsername string) (string, e
 		CancelURL:  stripe.String("https://derivlens-pro.vercel.app/dashboard"),
 		Metadata: map[string]string{
 			"telegram_username": telegramUsername,
+			"plan":              plan,
 		},
 	}
 
@@ -62,20 +61,25 @@ func (s *StripeClient) CreateCheckoutSession(telegramUsername string) (string, e
 }
 
 // OnCheckoutCompleted is called when checkout.session.completed fires.
-// Returns telegram_username, customerID, subscriptionID for the handler to update Supabase.
-func (s *StripeClient) OnCheckoutCompleted(sess *stripe.CheckoutSession) (telegramUsername, customerID, subscriptionID string) {
+// Returns telegram_username, tier, customerID, subscriptionID for the handler to update Supabase.
+// Tier is "basic" or "pro" from session metadata (plan).
+func (s *StripeClient) OnCheckoutCompleted(sess *stripe.CheckoutSession) (telegramUsername, tier, customerID, subscriptionID string) {
 	if sess.Metadata != nil {
 		telegramUsername = sess.Metadata["telegram_username"]
+		tier = sess.Metadata["plan"]
+		if tier == "" {
+			tier = "pro"
+		}
+	} else {
+		tier = "pro"
 	}
 	if sess.Customer != nil {
 		customerID = sess.Customer.ID
-	} else if sess.CustomerDetails != nil && sess.CustomerDetails.Email != "" {
-		// Customer might be in CustomerDetails for checkout
 	}
 	if sess.Subscription != nil {
 		subscriptionID = sess.Subscription.ID
 	}
-	return telegramUsername, customerID, subscriptionID
+	return telegramUsername, tier, customerID, subscriptionID
 }
 
 // WebhookUpdate holds data to update a subscriber from a webhook event.
@@ -111,12 +115,12 @@ func (s *StripeClient) HandleWebhook(payload []byte, sigHeader string, updateFn 
 			log.Printf("billing: checkout.session.completed unmarshal: %v", err)
 			return nil
 		}
-		username, custID, subID := s.OnCheckoutCompleted(&sess)
+		username, tier, custID, subID := s.OnCheckoutCompleted(&sess)
 		if username != "" {
 			updateFn(WebhookUpdate{
 				EventType:        "checkout.session.completed",
 				TelegramUsername: username,
-				Tier:             "pro",
+				Tier:             tier,
 				CustomerID:       custID,
 				SubscriptionID:   subID,
 				Status:           "active",

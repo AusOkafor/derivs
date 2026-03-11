@@ -16,7 +16,8 @@ type Config struct {
 	SupabaseServiceKey   string
 	StripeSecretKey      string
 	StripeWebhookSecret  string
-	StripeProPriceID     string
+	StripePriceIDBasic   string
+	StripePriceIDPro     string
 	AdminSecret          string
 }
 
@@ -31,7 +32,8 @@ func Load() *Config {
 		SupabaseServiceKey: os.Getenv("SUPABASE_SERVICE_KEY"),
 		StripeSecretKey:    os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
-		StripeProPriceID:   os.Getenv("STRIPE_PRO_PRICE_ID"),
+		StripePriceIDBasic: os.Getenv("STRIPE_PRICE_ID_BASIC"),
+		StripePriceIDPro:   os.Getenv("STRIPE_PRICE_ID_PRO"),
 		AdminSecret:       os.Getenv("ADMIN_SECRET"),
 	}
 

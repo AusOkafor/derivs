@@ -100,32 +100,50 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 }
 
-// isFreeTier returns true if tier is empty or "free".
-func isFreeTier(tier string) bool {
-	return tier == "" || tier == "free"
+// isProTier returns true if tier is "pro".
+func isProTier(tier string) bool {
+	return tier == "pro"
 }
 
-// isBTCSymbol returns true for BTC-related symbols (free tier only gets these).
-func isBTCSymbol(symbol string) bool {
-	return strings.EqualFold(symbol, "BTC")
+// allowedSymbols returns the symbols a subscriber is allowed to receive alerts for.
+// Free: BTC only. Basic: up to 5 symbols. Pro: all symbols.
+func allowedSymbols(sub supabase.Subscriber) []string {
+	switch sub.Tier {
+	case "pro":
+		return sub.Symbols
+	case "basic":
+		if len(sub.Symbols) > 5 {
+			return sub.Symbols[:5]
+		}
+		return sub.Symbols
+	default: // free or empty
+		allowed := []string{}
+		for _, s := range sub.Symbols {
+			if strings.EqualFold(s, "BTC") {
+				allowed = append(allowed, s)
+			}
+		}
+		return allowed
+	}
 }
 
-// runCycleFree runs for free-tier subscribers, 5-min interval, BTC symbols only.
+// runCycleFree runs for free and basic tier subscribers, 5-min interval.
+// Free: BTC only. Basic: up to 5 symbols.
 func (w *Worker) runCycleFree(ctx context.Context) {
-	w.runCycle(ctx, true)
+	w.runCycle(ctx, false) // freeCycle = not pro
 }
 
-// runCyclePro runs for pro-tier subscribers, 1-min interval, all symbols.
+// runCyclePro runs for pro-tier subscribers only, 1-min interval, all symbols.
 func (w *Worker) runCyclePro(ctx context.Context) {
 	log.Println("worker: pro cycle starting")
-	n := w.runCycle(ctx, false)
+	n := w.runCycle(ctx, true) // proCycle
 	log.Printf("worker: pro cycle found %d pro subscribers", n)
 }
 
 // runCycle executes one full notification cycle.
-// freeOnly: if true, only free-tier subscribers and BTC symbols; if false, only pro-tier and all symbols.
+// proOnly: if true, only pro-tier subscribers; if false, free and basic tiers.
 // Returns the count of filtered subscribers for logging.
-func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
+func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 	sentThisCycle := make(map[string]bool)
 
 	subscribers, err := w.db.GetActiveSubscribers(ctx)
@@ -137,10 +155,14 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 	// Filter by tier.
 	var filtered []supabase.Subscriber
 	for _, sub := range subscribers {
-		if freeOnly && !isFreeTier(sub.Tier) {
+		tier := sub.Tier
+		if tier == "" {
+			tier = "free"
+		}
+		if proOnly && !isProTier(tier) {
 			continue
 		}
-		if !freeOnly && isFreeTier(sub.Tier) {
+		if !proOnly && isProTier(tier) {
 			continue
 		}
 		filtered = append(filtered, sub)
@@ -150,13 +172,10 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 		return 0
 	}
 
-	// Collect symbols; for free tier only BTC.
+	// Collect symbols using allowedSymbols per subscriber.
 	symbolSet := make(map[string]struct{})
 	for _, sub := range subscribers {
-		for _, sym := range sub.Symbols {
-			if freeOnly && !isBTCSymbol(sym) {
-				continue
-			}
+		for _, sym := range allowedSymbols(sub) {
 			symbolSet[sym] = struct{}{}
 		}
 	}
@@ -174,7 +193,7 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 		}
 		alerts := w.detector.Analyze(snap)
 		snapshots[sym] = symbolAlerts{detected: alerts}
-		if !freeOnly {
+		if proOnly {
 			log.Printf("worker: pro cycle found %d alerts for %s", len(alerts), sym)
 		}
 		// Log every alert that fires to alert_history (regardless of subscriber dedup)
@@ -190,22 +209,19 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 			continue
 		}
 
-		for _, sym := range sub.Symbols {
-			if freeOnly && !isBTCSymbol(sym) {
-				continue
-			}
+		for _, sym := range allowedSymbols(sub) {
 			sa, ok := snapshots[sym]
 			if !ok {
 				continue
 			}
 
 			for _, alert := range sa.detected {
-				if !w.shouldSendAlert(sub.Rules, alert) {
-					if !freeOnly {
-						log.Printf("worker: pro cycle skipping %s (rules filter)", alert.ID)
-					}
-					continue
+			if !w.shouldSendAlert(sub.Rules, alert) {
+				if proOnly {
+					log.Printf("worker: pro cycle skipping %s (rules filter)", alert.ID)
 				}
+				continue
+			}
 
 				cycleKey := fmt.Sprintf("%s:%s", sub.ID, alert.ID)
 				if sentThisCycle[cycleKey] {
@@ -218,7 +234,7 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 					continue
 				}
 				if alreadySent {
-					if !freeOnly {
+					if proOnly {
 						log.Printf("worker: pro cycle skipping %s (dedup: already sent within 1h)", alert.ID)
 					}
 					continue
@@ -230,7 +246,7 @@ func (w *Worker) runCycle(ctx context.Context, freeOnly bool) int {
 					continue
 				}
 
-				if !freeOnly {
+				if proOnly {
 					log.Printf("worker: pro cycle sending alert to %s: %s", sub.TelegramUsername, alert.Message)
 				}
 				sentThisCycle[cycleKey] = true

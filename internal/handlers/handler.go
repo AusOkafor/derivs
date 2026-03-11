@@ -12,15 +12,17 @@ import (
 )
 
 type Handler struct {
-	aggregator  *aggregator.Aggregator
-	analyzer    *analysis.Analyzer
-	cache       *cache.Cache
-	detector    *alerts.Detector
-	calc        *feargreed.Calculator
-	db          *supabase.Client
-	notifier    *notify.TelegramNotifier
-	billing     *billing.StripeClient
-	adminSecret string
+	aggregator        *aggregator.Aggregator
+	analyzer          *analysis.Analyzer
+	cache             *cache.Cache
+	detector          *alerts.Detector
+	calc              *feargreed.Calculator
+	db                *supabase.Client
+	notifier          *notify.TelegramNotifier
+	billing           *billing.StripeClient
+	adminSecret       string
+	stripePriceIDBasic string
+	stripePriceIDPro   string
 }
 
 func New(
@@ -33,16 +35,19 @@ func New(
 	notifier *notify.TelegramNotifier,
 	billingClient *billing.StripeClient,
 	adminSecret string,
+	stripePriceIDBasic, stripePriceIDPro string,
 ) *Handler {
 	return &Handler{
-		aggregator:  agg,
-		analyzer:    az,
-		cache:       c,
-		detector:    det,
-		calc:        calc,
-		db:          db,
-		notifier:    notifier,
-		billing:     billingClient,
-		adminSecret: adminSecret,
+		aggregator:         agg,
+		analyzer:           az,
+		cache:              c,
+		detector:           det,
+		calc:               calc,
+		db:                 db,
+		notifier:           notifier,
+		billing:            billingClient,
+		adminSecret:        adminSecret,
+		stripePriceIDBasic: stripePriceIDBasic,
+		stripePriceIDPro:   stripePriceIDPro,
 	}
 }

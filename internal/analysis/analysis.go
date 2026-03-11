@@ -155,11 +155,20 @@ Respond ONLY with a valid JSON object, no markdown, no explanation:
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
-func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot) (models.AIAnalysis, error) {
+func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, tier string) (models.AIAnalysis, error) {
 	if !IsAIEnabled() {
 		return models.AIAnalysis{
 			Symbol:      snap.Symbol,
 			Summary:     "AI analysis is currently paused.",
+			Sentiment:   "neutral",
+			Confidence:  0,
+			GeneratedAt: time.Now().UTC(),
+		}, nil
+	}
+	if tier != "pro" {
+		return models.AIAnalysis{
+			Symbol:      snap.Symbol,
+			Summary:     "Upgrade to Pro to unlock AI-powered market analysis.",
 			Sentiment:   "neutral",
 			Confidence:  0,
 			GeneratedAt: time.Now().UTC(),

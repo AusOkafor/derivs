@@ -46,7 +46,7 @@ func (hub *Hub) getOrFetch(ctx context.Context, symbol string) (models.SnapshotW
 		log.Printf("ws: snapshot symbol mismatch: requested %s, got %s", symbol, snap.Symbol)
 	}
 
-	ai, _ := hub.handler.analyzer.Analyze(ctx, snap)
+	ai, _ := hub.handler.analyzer.Analyze(ctx, snap, "free") // WebSocket has no user context; use free tier
 
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,

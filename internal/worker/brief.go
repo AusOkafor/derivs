@@ -140,28 +140,49 @@ func (w *Worker) SendMorningBrief(ctx context.Context) {
 		return
 	}
 
-	sentFree, sentPro := 0, 0
+	sentFree, sentBasic, sentPro := 0, 0, 0
 	for _, sub := range subs {
 		if sub.ChatID == 0 {
 			continue
 		}
-		msg := fullBrief
-		if isFreeTier(sub.Tier) {
+		tier := sub.Tier
+		if tier == "" {
+			tier = "free"
+		}
+		var msg string
+		switch tier {
+		case "free":
 			msg = freeBrief
-			if err := w.notifier.SendMessage(ctx, sub.ChatID, msg); err != nil {
-				log.Printf("worker: brief SendMessage(free %s): %v", sub.TelegramUsername, err)
-			} else {
-				sentFree++
+		case "basic":
+			syms := sub.Symbols
+			if len(syms) > 5 {
+				syms = syms[:5]
 			}
+			basicSnapshots := make(map[string]briefSnapshot)
+			for _, sym := range syms {
+				if bs, ok := snapshots[sym]; ok {
+					basicSnapshots[sym] = bs
+				}
+			}
+			msg = w.buildBrief(basicSnapshots, syms, topLongs, topShorts, topFundingSym, topFundingRate, dateStr, true)
+		default: // pro
+			msg = fullBrief
+		}
+		tierLabel := tier
+		if err := w.notifier.SendMessage(ctx, sub.ChatID, msg); err != nil {
+			log.Printf("worker: brief SendMessage(%s %s): %v", tierLabel, sub.TelegramUsername, err)
 		} else {
-			if err := w.notifier.SendMessage(ctx, sub.ChatID, msg); err != nil {
-				log.Printf("worker: brief SendMessage(pro %s): %v", sub.TelegramUsername, err)
-			} else {
+			switch tier {
+			case "free":
+				sentFree++
+			case "basic":
+				sentBasic++
+			default:
 				sentPro++
 			}
 		}
 	}
-	log.Printf("worker: morning brief sent to %d free, %d pro subscribers", sentFree, sentPro)
+	log.Printf("worker: morning brief sent to %d free, %d basic, %d pro subscribers", sentFree, sentBasic, sentPro)
 }
 
 func (w *Worker) buildBrief(

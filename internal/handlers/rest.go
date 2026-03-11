@@ -24,21 +24,39 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v) //nolint:errcheck
 }
 
-// GetSnapshot handles GET /api/snapshot?symbol=BTC
+// GetSnapshot handles GET /api/snapshot?symbol=BTC&username=johndoe
+// username is optional — if provided, fetches tier from Supabase and only runs AI for pro tier.
+// When username is provided, cache is bypassed to serve tier-specific AI.
 func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	symbol := r.URL.Query().Get("symbol")
 	if symbol == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol query parameter is required"})
 		return
 	}
+	username := r.URL.Query().Get("username")
 
-	if cached, ok := h.cache.Get(symbol); ok {
-		if cached.Snapshot.Symbol != symbol {
-			log.Printf("GetSnapshot: cache symbol mismatch: requested %s, got %s", symbol, cached.Snapshot.Symbol)
+	tier := ""
+	if username != "" {
+		var err error
+		tier, _, err = h.db.GetSubscriberTier(r.Context(), username)
+		if err != nil {
+			log.Printf("GetSnapshot: GetSubscriberTier(%s): %v", username, err)
 		}
-		w.Header().Set("X-Cache", "HIT")
-		writeJSON(w, http.StatusOK, cached)
-		return
+		if tier == "" {
+			tier = "free"
+		}
+	}
+
+	// Bypass cache when username provided (tier-specific AI)
+	if username == "" {
+		if cached, ok := h.cache.Get(symbol); ok {
+			if cached.Snapshot.Symbol != symbol {
+				log.Printf("GetSnapshot: cache symbol mismatch: requested %s, got %s", symbol, cached.Snapshot.Symbol)
+			}
+			w.Header().Set("X-Cache", "HIT")
+			writeJSON(w, http.StatusOK, cached)
+			return
+		}
 	}
 
 	ctx := r.Context()
@@ -52,9 +70,8 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		log.Printf("GetSnapshot: snapshot symbol mismatch: requested %s, got %s", symbol, snap.Symbol)
 	}
 
-	// Analyze always returns a usable value (fallback on error); discard the error
-	// since the fallback is intentionally safe to serve.
-	ai, _ := h.analyzer.Analyze(ctx, snap)
+	// Analyze always returns a usable value (fallback on error); only runs Claude for pro tier.
+	ai, _ := h.analyzer.Analyze(ctx, snap, tier)
 
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
@@ -63,7 +80,9 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		FearGreed: h.calc.Calculate(snap),
 	}
 
-	h.cache.Set(symbol, result)
+	if username == "" {
+		h.cache.Set(symbol, result)
+	}
 
 	w.Header().Set("X-Cache", "MISS")
 	writeJSON(w, http.StatusOK, result)
@@ -374,7 +393,7 @@ func (h *Handler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 // ─── Billing ───────────────────────────────────────────────────────────────────
 
 // CreateCheckout handles POST /api/billing/checkout.
-// Body: {"telegram_username": "johndoe"}
+// Body: {"telegram_username": "johndoe", "plan": "basic"|"pro"}
 // Creates Stripe checkout session, returns {"checkout_url": "https://checkout.stripe.com/..."}
 func (h *Handler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -384,6 +403,7 @@ func (h *Handler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		TelegramUsername string `json:"telegram_username"`
+		Plan             string `json:"plan"` // "basic" or "pro"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TelegramUsername == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "telegram_username is required"})
@@ -395,7 +415,18 @@ func (h *Handler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := h.billing.CreateCheckoutSession(req.TelegramUsername)
+	priceID := h.stripePriceIDPro
+	plan := "pro"
+	if req.Plan == "basic" && h.stripePriceIDBasic != "" {
+		priceID = h.stripePriceIDBasic
+		plan = "basic"
+	}
+	if priceID == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "billing not configured for selected plan"})
+		return
+	}
+
+	url, err := h.billing.CreateCheckoutSession(req.TelegramUsername, priceID, plan)
 	if err != nil {
 		log.Printf("billing: CreateCheckoutSession: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
