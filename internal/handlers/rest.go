@@ -15,6 +15,7 @@ import (
 	"derivs-backend/internal/analysis"
 	"derivs-backend/internal/billing"
 	"derivs-backend/internal/models"
+	"derivs-backend/internal/signals"
 	"derivs-backend/internal/supabase"
 )
 
@@ -187,7 +188,9 @@ func (h *Handler) GetAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, h.detector.Analyze(snap))
+	engine := signals.New()
+	sigs := engine.Analyze(snap)
+	writeJSON(w, http.StatusOK, h.detector.Analyze(snap, sigs))
 }
 
 // GetTickers handles GET /api/tickers?symbols=BTC,ETH,SOL,ARB,DOGE,AVAX

@@ -88,17 +88,6 @@ func errFallback(symbol string) models.AIAnalysis {
 	}
 }
 
-// largestLevel returns the liquidation level with the highest SizeUsd for the given side.
-func largestLevel(levels []models.LiquidationLevel, side string) models.LiquidationLevel {
-	var best models.LiquidationLevel
-	for _, l := range levels {
-		if l.Side == side && l.SizeUsd > best.SizeUsd {
-			best = l
-		}
-	}
-	return best
-}
-
 // stripFences removes accidental markdown code fences Claude may wrap its JSON in.
 func stripFences(s string) string {
 	s = strings.TrimSpace(s)
@@ -111,51 +100,73 @@ func stripFences(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// buildPrompt assembles the user-turn prompt from live snapshot data.
-func buildPrompt(snap models.MarketSnapshot) string {
-	fr := snap.FundingRate
-	oi := snap.OpenInterest
-
-	nextFunding := time.UnixMilli(fr.NextFundingTime).UTC().Format("15:04 UTC")
-
-	longLiq := largestLevel(snap.LiquidationMap.Levels, "long")
-	shortLiq := largestLevel(snap.LiquidationMap.Levels, "short")
-
-	var longPct, shortPct float64
+// buildPrompt assembles the user-turn prompt from live snapshot data and pre-computed signals.
+func buildPrompt(snap models.MarketSnapshot, sigs models.MarketSignals) string {
+	avgLong := 50.0
 	if len(snap.LongShortRatios) > 0 {
-		longPct = snap.LongShortRatios[0].LongPct
-		shortPct = snap.LongShortRatios[0].ShortPct
+		sum := 0.0
+		for _, r := range snap.LongShortRatios {
+			sum += r.LongPct
+		}
+		avgLong = sum / float64(len(snap.LongShortRatios))
 	}
 
-	return fmt.Sprintf(
-		`You are a crypto derivatives market analyst. Analyze the following market data and provide a structured assessment.
+	return fmt.Sprintf(`You are a professional crypto derivatives analyst.
 
-Symbol: %s
-Funding Rate: %.4f%% (next funding: %s)
-Open Interest: $%.2f (1h: %.2f%%, 4h: %.2f%%, 24h: %.2f%%)
-Liquidation Clusters:
-  - Largest long liquidation zone: $%.2f ($%.2fM)
-  - Largest short liquidation zone: $%.2f ($%.2fM)
-Long/Short Ratio (Binance): %.1f%% longs vs %.1f%% shorts
+Market regime has been pre-calculated for you. Your job is to explain it clearly.
+
+SYMBOL: %s
+MARKET REGIME: %s (Confidence: %d%%)
+OI TREND: %s
+LEVERAGE IMBALANCE: %s
+SHORT SQUEEZE PROBABILITY: %d%%
+LONG SQUEEZE PROBABILITY: %d%%
+%s
+
+RAW DATA:
+Funding Rate: %.4f%%
+Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
+Long/Short: %.1f%% longs
+
+In 2-3 sentences, explain:
+1. What the market regime means for traders right now
+2. Which side is more at risk (longs or shorts)
+3. What traders should watch for
+
+Be direct and actionable. Never predict exact price.
 
 Respond ONLY with a valid JSON object, no markdown, no explanation:
 {
-  "summary": "2-3 sentence plain English analysis of current positioning",
+  "summary": "2-3 sentence plain English analysis",
   "sentiment": "bullish" | "neutral" | "bearish",
   "confidence": 0-100
 }`,
 		snap.Symbol,
-		fr.Rate*100, nextFunding,
-		oi.OIUsd, oi.OIChange1h, oi.OIChange4h, oi.OIChange24h,
-		longLiq.Price, longLiq.SizeUsd/1_000_000,
-		shortLiq.Price, shortLiq.SizeUsd/1_000_000,
-		longPct, shortPct,
+		sigs.Regime, sigs.RegimeConfidence,
+		sigs.OITrend,
+		sigs.LeverageImbalance,
+		sigs.ShortSqueezeProbability,
+		sigs.LongSqueezeProbability,
+		formatMagnet(sigs.LiquidationMagnet),
+		snap.FundingRate.Rate*100,
+		snap.OpenInterest.OIUsd/1_000_000,
+		snap.OpenInterest.OIChange1h,
+		snap.OpenInterest.OIChange24h,
+		avgLong,
 	)
+}
+
+func formatMagnet(m *models.LiquidationMagnet) string {
+	if m == nil {
+		return "LIQUIDATION MAGNET: None detected within 3%%"
+	}
+	return fmt.Sprintf("LIQUIDATION MAGNET: %s cluster at $%.0f (%.1f%% away, %d%% probability of sweep)",
+		m.Side, m.Price, m.Distance, m.Probability)
 }
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
-func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, tier string) (models.AIAnalysis, error) {
+func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, sigs models.MarketSignals, tier string) (models.AIAnalysis, error) {
 	if !IsAIEnabled() {
 		return models.AIAnalysis{
 			Symbol:      snap.Symbol,
@@ -182,7 +193,7 @@ func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, tier
 		return errFallback(snap.Symbol), ctx.Err()
 	}
 
-	prompt := buildPrompt(snap)
+	prompt := buildPrompt(snap, sigs)
 	promptPreview := prompt
 	if len(promptPreview) > 200 {
 		promptPreview = promptPreview[:200]

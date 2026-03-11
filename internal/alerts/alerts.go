@@ -64,9 +64,9 @@ func groupIntoBuckets(levels []models.LiquidationLevel, bucketSize float64) []pr
 
 func New() *Detector { return &Detector{} }
 
-// Analyze runs all detection rules against the snapshot and returns any
+// Analyze runs all detection rules against the snapshot and signals, and returns any
 // triggered alerts. Returns an empty (non-nil) slice if nothing fires.
-func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
+func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals) []models.Alert {
 	var out []models.Alert
 	now := time.Now().UTC()
 
@@ -198,6 +198,54 @@ func (d *Detector) Analyze(snap models.MarketSnapshot) []models.Alert {
 				Timestamp: now,
 			})
 		}
+	}
+
+	// ── Rule 9: Short squeeze probability high ─────────────────────────────────
+	if sigs.ShortSqueezeProbability >= 65 {
+		id := fmt.Sprintf("short-squeeze-%d", sigs.ShortSqueezeProbability/10*10)
+		out = append(out, models.Alert{
+			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
+			Symbol:    snap.Symbol,
+			Message:   fmt.Sprintf("Short squeeze probability at %d%% — negative funding, shorts overcrowded, liquidation clusters above price. Watch for rapid upward move.", sigs.ShortSqueezeProbability),
+			Severity:  "high",
+			Timestamp: now,
+		})
+	}
+
+	// ── Rule 10: Long squeeze probability high ──────────────────────────────────
+	if sigs.LongSqueezeProbability >= 65 {
+		id := fmt.Sprintf("long-squeeze-%d", sigs.LongSqueezeProbability/10*10)
+		out = append(out, models.Alert{
+			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
+			Symbol:    snap.Symbol,
+			Message:   fmt.Sprintf("Long squeeze probability at %d%% — elevated funding, longs overcrowded, liquidation clusters below price. Watch for rapid downward move.", sigs.LongSqueezeProbability),
+			Severity:  "high",
+			Timestamp: now,
+		})
+	}
+
+	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
+	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 70 {
+		m := sigs.LiquidationMagnet
+		id := fmt.Sprintf("liq-magnet-%.0f", m.Price)
+		out = append(out, models.Alert{
+			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
+			Symbol:    snap.Symbol,
+			Message:   fmt.Sprintf("Liquidity magnet detected: large %s cluster at $%.0f (%.1f%% away). %d%% probability of price sweep toward this level.", m.Side, m.Price, m.Distance, m.Probability),
+			Severity:  "high",
+			Timestamp: now,
+		})
+	}
+
+	// ── Rule 12: Market regime change to Liquidation Event ──────────────────────
+	if sigs.Regime == models.RegimeLiquidation {
+		out = append(out, models.Alert{
+			ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
+			Symbol:    snap.Symbol,
+			Message:   "Market regime: Liquidation Event detected. OI dropping sharply — forced position closures underway. Potential local top/bottom forming.",
+			Severity:  "high",
+			Timestamp: now,
+		})
 	}
 
 	if out == nil {

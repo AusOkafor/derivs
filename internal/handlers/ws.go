@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"derivs-backend/internal/models"
+	"derivs-backend/internal/signals"
 	"golang.org/x/net/websocket"
 )
 
@@ -46,13 +47,17 @@ func (hub *Hub) getOrFetch(ctx context.Context, symbol string) (models.SnapshotW
 		log.Printf("ws: snapshot symbol mismatch: requested %s, got %s", symbol, snap.Symbol)
 	}
 
-	ai, _ := hub.handler.analyzer.Analyze(ctx, snap, "free") // WebSocket has no user context; use free tier
+	engine := signals.New()
+	sigs := engine.Analyze(snap)
+
+	ai, _ := hub.handler.analyzer.Analyze(ctx, snap, sigs, "free") // WebSocket has no user context; use free tier
 
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
 		Analysis:  ai,
-		Alerts:    hub.handler.detector.Analyze(snap),
+		Alerts:    hub.handler.detector.Analyze(snap, sigs),
 		FearGreed: hub.handler.calc.Calculate(snap),
+		Signals:   sigs,
 	}
 	hub.handler.cache.Set(symbol, result)
 	return result, nil

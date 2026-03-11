@@ -15,6 +15,7 @@ import (
 	"derivs-backend/internal/feargreed"
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/notify"
+	"derivs-backend/internal/signals"
 	"derivs-backend/internal/supabase"
 )
 
@@ -196,13 +197,15 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 	}
 	snapshots := make(map[string]symbolAlerts, len(symbolSet))
 
+	engine := signals.New()
 	for sym := range symbolSet {
 		snap, err := w.aggregator.FetchSnapshot(ctx, sym)
 		if err != nil {
 			log.Printf("worker: FetchSnapshot(%s): %v", sym, err)
 			continue
 		}
-		alerts := w.detector.Analyze(snap)
+		sigs := engine.Analyze(snap)
+		alerts := w.detector.Analyze(snap, sigs)
 		snapshots[sym] = symbolAlerts{detected: alerts}
 		if proOnly {
 			log.Printf("worker: pro cycle found %d alerts for %s", len(alerts), sym)

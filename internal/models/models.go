@@ -88,11 +88,55 @@ type FearGreedScore struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// MarketRegime represents the current market state
+type MarketRegime string
+
+const (
+	RegimeTrending     MarketRegime = "Trending"
+	RegimeRanging      MarketRegime = "Ranging"
+	RegimeLiquidation  MarketRegime = "Liquidation Event"
+	RegimeAccumulation MarketRegime = "Accumulation"
+	RegimeDistribution MarketRegime = "Distribution"
+)
+
+// OITrend represents OI + price correlation
+type OITrend string
+
+const (
+	OITrendNewLongs       OITrend = "New longs entering — trend confirmation"
+	OITrendShortCovering  OITrend = "Short covering rally"
+	OITrendNewShorts     OITrend = "New shorts building"
+	OITrendLongLiquidation OITrend = "Long liquidation — deleveraging"
+)
+
+// LiquidationMagnet represents a nearby liquidation cluster that may attract price
+type LiquidationMagnet struct {
+	Side        string  `json:"side"`        // "long" or "short"
+	Price       float64 `json:"price"`
+	SizeUSD     float64 `json:"size_usd"`
+	Distance    float64 `json:"distance"`    // % distance from current price
+	Probability int     `json:"probability"` // 0-100
+}
+
+// MarketSignals holds all pre-interpreted signals from the signal engine
+type MarketSignals struct {
+	Symbol                 string            `json:"symbol"`
+	Regime                 MarketRegime     `json:"regime"`
+	RegimeConfidence       int              `json:"regime_confidence"`
+	OITrend                OITrend          `json:"oi_trend"`
+	ShortSqueezeProbability int             `json:"short_squeeze_probability"` // 0-100
+	LongSqueezeProbability  int             `json:"long_squeeze_probability"`  // 0-100
+	LiquidationMagnet      *LiquidationMagnet `json:"liquidation_magnet,omitempty"`
+	LeverageImbalance      string           `json:"leverage_imbalance"` // "Longs overcrowded" / "Shorts overcrowded" / "Balanced"
+	SqueezeDirection       string           `json:"squeeze_direction"`  // "Long squeeze risk" / "Short squeeze risk" / "None"
+}
+
 type SnapshotWithAnalysis struct {
 	Snapshot  MarketSnapshot `json:"snapshot"`
 	Analysis  AIAnalysis     `json:"analysis"`
 	Alerts    []Alert        `json:"alerts"`
 	FearGreed FearGreedScore `json:"fear_greed"`
+	Signals   MarketSignals  `json:"signals"`
 }
 
 type TickerInfo struct {
