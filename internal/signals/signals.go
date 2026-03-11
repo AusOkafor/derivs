@@ -1,7 +1,6 @@
 package signals
 
 import (
-	"log"
 	"math"
 	"sort"
 
@@ -119,11 +118,7 @@ func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagn
 
 func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 	currentPrice := snap.LiquidationMap.CurrentPrice
-	log.Printf("[gravity-START] symbol=%s currentPrice=%.4f totalLevels=%d",
-		snap.Symbol, currentPrice, len(snap.LiquidationMap.Levels))
-
 	if currentPrice == 0 {
-		log.Printf("[gravity] currentPrice is 0, returning neutral")
 		return models.LiquidityGravity{Dominant: "neutral", UpwardPull: 50, DownwardPull: 50}
 	}
 
@@ -134,10 +129,6 @@ func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 	var gravityLevels []models.GravityLevel
 
 	for _, lvl := range snap.LiquidationMap.Levels {
-		above := lvl.Price > currentPrice
-		log.Printf("[gravity-lvl] price=%.1f side=%s size=%.2f above=%v passes_filter=%v",
-			lvl.Price, lvl.Side, lvl.SizeUsd, above, lvl.SizeUsd >= 10_000)
-
 		if lvl.SizeUsd < 10_000 {
 			continue
 		}
@@ -180,9 +171,6 @@ func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
 	}
 
 	total := upwardWeight + downwardWeight
-	log.Printf("[gravity] currentPrice=%.2f levels=%d upWeight=%.2f downWeight=%.2f upSize=%.2f downSize=%.2f",
-		currentPrice, len(snap.LiquidationMap.Levels), upwardWeight, downwardWeight, upwardSize, downwardSize)
-
 	if total == 0 {
 		return models.LiquidityGravity{
 			Dominant:     "neutral",
