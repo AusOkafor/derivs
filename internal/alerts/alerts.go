@@ -94,6 +94,19 @@ func zoneSeverity(zone LiquidationZone, distance float64) string {
 	return ""
 }
 
+func formatPrice(p float64) string {
+	switch {
+	case p >= 1000:
+		return fmt.Sprintf("$%.0f", p)
+	case p >= 10:
+		return fmt.Sprintf("$%.2f", p)
+	case p >= 1:
+		return fmt.Sprintf("$%.3f", p)
+	default:
+		return fmt.Sprintf("$%.4f", p)
+	}
+}
+
 func New() *Detector { return &Detector{} }
 
 // Analyze runs all detection rules against the snapshot and signals, and returns any
@@ -209,9 +222,9 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			sizeStr = fmt.Sprintf("$%.0fk", zone.TotalUSD/1_000)
 		}
 
-		priceRange := fmt.Sprintf("$%.0f", zone.MinPrice)
+		priceRange := formatPrice(zone.MinPrice)
 		if zone.MaxPrice != zone.MinPrice {
-			priceRange = fmt.Sprintf("$%.0f – $%.0f", zone.MinPrice, zone.MaxPrice)
+			priceRange = fmt.Sprintf("%s – %s", formatPrice(zone.MinPrice), formatPrice(zone.MaxPrice))
 		}
 
 		var directionMsg string
@@ -309,7 +322,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		out = append(out, models.Alert{
 			ID:       fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:   snap.Symbol,
-			Message:  fmt.Sprintf("Liquidity sweep alert: large %s cluster at $%.0f (%.2f%% away)\n\nMarket context:\n• %s\n• %s\n• %s\n\nSweep probability: %d%%", m.Side, m.Price, m.Distance, fundingCtx, oiCtx, sigs.LeverageImbalance, m.Probability),
+			Message:  fmt.Sprintf("Liquidity sweep alert: large %s cluster at %s (%.2f%% away)\n\nMarket context:\n• %s\n• %s\n• %s\n\nSweep probability: %d%%", m.Side, formatPrice(m.Price), m.Distance, fundingCtx, oiCtx, sigs.LeverageImbalance, m.Probability),
 			Severity: "high",
 			Timestamp: now,
 		})
