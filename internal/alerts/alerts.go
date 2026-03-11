@@ -130,11 +130,14 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 
 	// ── Rule 2: OI spike (1h) ─────────────────────────────────────────────────
 	oi1h := snap.OpenInterest.OIChange1h
-	if math.Abs(oi1h) > 2.0 {
-		change := oi1h
+	if oi1h > 2.0 {
 		add("oi-spike-1h",
-			fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Watch for volatile directional move as positions build.",
-				change),
+			fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Watch for volatile directional move.", oi1h),
+			"high",
+		)
+	} else if oi1h < -2.0 {
+		add("oi-spike-1h",
+			fmt.Sprintf("OI down %.1f%% in 1h — rapid deleveraging detected. Liquidation cascade risk.", math.Abs(oi1h)),
 			"high",
 		)
 	}
@@ -321,6 +324,26 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			Severity:  "high",
 			Timestamp: now,
 		})
+	}
+
+	// Deduplicate zone vs magnet overlap — suppress zone alert if magnet covers same price
+	if sigs.LiquidationMagnet != nil {
+		magnetPrice := sigs.LiquidationMagnet.Price
+		filtered := out[:0]
+		for _, a := range out {
+			if strings.HasPrefix(a.ID, symbol+"-zone-") {
+				var zoneMid float64
+				fmt.Sscanf(a.ID, symbol+"-zone-%f", &zoneMid)
+				if magnetPrice > 0 {
+					dist := math.Abs(zoneMid-magnetPrice) / magnetPrice * 100
+					if dist <= 0.5 {
+						continue
+					}
+				}
+			}
+			filtered = append(filtered, a)
+		}
+		out = filtered
 	}
 
 	if out == nil {
