@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/stripe/stripe-go/v76"
+	portalsession "github.com/stripe/stripe-go/v76/billingportal/session"
 	"github.com/stripe/stripe-go/v76/checkout/session"
 	"github.com/stripe/stripe-go/v76/webhook"
 )
@@ -56,6 +57,27 @@ func (s *StripeClient) CreateCheckoutSession(telegramUsername, priceID, plan str
 	}
 	if sess.URL == "" {
 		return "", fmt.Errorf("billing: no URL in checkout session")
+	}
+	return sess.URL, nil
+}
+
+// CreatePortalSession creates a Stripe billing portal session for subscription management.
+func (s *StripeClient) CreatePortalSession(customerID, returnURL string) (string, error) {
+	if s.secretKey == "" || customerID == "" {
+		return "", fmt.Errorf("billing: Stripe not configured or missing customer")
+	}
+	stripe.Key = s.secretKey
+
+	params := &stripe.BillingPortalSessionParams{
+		Customer:  stripe.String(customerID),
+		ReturnURL: stripe.String(returnURL),
+	}
+	sess, err := portalsession.New(params)
+	if err != nil {
+		return "", fmt.Errorf("billing: CreatePortalSession: %w", err)
+	}
+	if sess.URL == "" {
+		return "", fmt.Errorf("billing: no URL in portal session")
 	}
 	return sess.URL, nil
 }

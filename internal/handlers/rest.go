@@ -506,6 +506,50 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// CreatePortal handles POST /api/billing/portal.
+// Body: {"username": "austinokwy"}
+// Returns {"url": "https://billing.stripe.com/..."}
+func (h *Handler) CreatePortal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username is required"})
+		return
+	}
+	username := strings.TrimPrefix(strings.TrimSpace(req.Username), "@")
+
+	if h.billing == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "billing not configured"})
+		return
+	}
+
+	customerID, err := h.db.GetSubscriberStripeCustomerID(r.Context(), username)
+	if err != nil {
+		log.Printf("billing: GetSubscriberStripeCustomerID(%s): %v", username, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get customer"})
+		return
+	}
+	if customerID == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no active subscription found"})
+		return
+	}
+
+	url, err := h.billing.CreatePortalSession(customerID, "https://derivlens-pro.vercel.app/dashboard")
+	if err != nil {
+		log.Printf("billing: CreatePortalSession: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"url": url})
+}
+
 // GetBillingStatus handles GET /api/billing/status?username=johndoe.
 // Returns {"tier": "free"|"pro", "status": "active"|"inactive"}
 func (h *Handler) GetBillingStatus(w http.ResponseWriter, r *http.Request) {

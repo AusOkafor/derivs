@@ -57,6 +57,7 @@ func main() {
 	mux.HandleFunc("/api/subscribe", h.Subscribe)
 	mux.HandleFunc("/api/unsubscribe", h.Unsubscribe)
 	mux.HandleFunc("/api/billing/checkout", h.CreateCheckout)
+	mux.HandleFunc("/api/billing/portal", h.CreatePortal)
 	mux.HandleFunc("/api/billing/webhook", h.StripeWebhook)
 	mux.HandleFunc("/api/billing/status", h.GetBillingStatus)
 	mux.HandleFunc("/api/webhook/telegram", h.TelegramWebhook)

@@ -286,6 +286,37 @@ func (c *Client) UpdateSubscriberTierByStripeID(ctx context.Context, customerID,
 	return c.UpdateSubscriberTier(ctx, subs[0].TelegramUsername, tier, customerID, subscriptionID, status)
 }
 
+// GetSubscriberStripeCustomerID returns the stripe_customer_id for a username, or empty if none.
+func (c *Client) GetSubscriberStripeCustomerID(ctx context.Context, telegramUsername string) (string, error) {
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=stripe_customer_id", c.baseURL, telegramUsername)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("supabase: GetSubscriberStripeCustomerID: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("supabase: GetSubscriberStripeCustomerID: status %d", resp.StatusCode)
+	}
+
+	var subs []struct {
+		StripeCustomerID string `json:"stripe_customer_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&subs); err != nil {
+		return "", fmt.Errorf("supabase: GetSubscriberStripeCustomerID decode: %w", err)
+	}
+	if len(subs) == 0 || subs[0].StripeCustomerID == "" {
+		return "", nil
+	}
+	return subs[0].StripeCustomerID, nil
+}
+
 // GetSubscriberTier returns the tier and status for a username.
 func (c *Client) GetSubscriberTier(ctx context.Context, telegramUsername string) (tier, status string, err error) {
 	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=tier,subscription_status", c.baseURL, telegramUsername)
