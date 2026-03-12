@@ -111,9 +111,16 @@ func buildPrompt(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 		avgLong = sum / float64(len(snap.LongShortRatios))
 	}
 
-	return fmt.Sprintf(`You are a professional crypto derivatives analyst.
+	return fmt.Sprintf(`You are a professional crypto derivatives analyst writing for experienced traders.
 
-Market regime has been pre-calculated for you. Your job is to explain it clearly.
+CRITICAL RULES:
+- Never use certainty language: avoid "will", "imminent", "definitely", "certainly"
+- Always use probability language: "likely", "increases probability of", "suggests", "watch for"
+- Always reference specific price levels and percentages from the data
+- Distinguish between sweep probability (price touches level) and squeeze probability (full cascade)
+- A 95%% magnet sweep probability means price is likely to touch that level, NOT that a full squeeze follows
+
+Market regime has been pre-calculated. Explain it clearly.
 
 SYMBOL: %s
 MARKET REGIME: %s (Confidence: %d%%)
@@ -133,17 +140,28 @@ State: %s (Score: %d/100)
 Expected Move: %s
 Triggers: %s
 
+STOP HUNT PROBABILITY:
+Short side hunted first: %d%%
+Long side hunted first: %d%%
+Target: %s side near $%.0f
+Reasoning: %s
+
+EXCHANGE DIVERGENCE:
+Detected: %v (spread: %.1f%%)
+%s long-heavy: %.1f%% | %s short-heavy: %.1f%%
+Signal: %s
+
 RAW DATA:
 Funding Rate: %.4f%%
 Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
 Long/Short: %.1f%% longs
 
-In 2-3 sentences, explain:
-1. What the market regime means for traders right now
-2. Which side is more at risk (longs or shorts)
-3. What traders should watch for
+In 2-3 sentences explain:
+1. What the current regime and signals suggest for near-term price action
+2. Which side faces higher liquidation risk and why
+3. One specific price level traders should watch as a trigger
 
-Be direct and actionable. Never predict exact price.
+Use probability language. Never predict exact outcomes.
 
 Respond ONLY with a valid JSON object, no markdown, no explanation:
 {
@@ -169,6 +187,18 @@ Respond ONLY with a valid JSON object, no markdown, no explanation:
 		sigs.Volatility.Score,
 		sigs.Volatility.ExpectedMove,
 		strings.Join(sigs.Volatility.Triggers, ", "),
+		sigs.StopHunt.ShortSideProb,
+		sigs.StopHunt.LongSideProb,
+		sigs.StopHunt.TargetSide,
+		sigs.StopHunt.TargetPrice,
+		sigs.StopHunt.Reasoning,
+		sigs.ExchangeDivergence.Detected,
+		sigs.ExchangeDivergence.MaxSpread,
+		sigs.ExchangeDivergence.BullishEx,
+		sigs.ExchangeDivergence.BullishPct,
+		sigs.ExchangeDivergence.BearishEx,
+		sigs.ExchangeDivergence.BearishPct,
+		sigs.ExchangeDivergence.Signal,
 		snap.FundingRate.Rate*100,
 		snap.OpenInterest.OIUsd/1_000_000,
 		snap.OpenInterest.OIChange1h,

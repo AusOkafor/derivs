@@ -37,6 +37,12 @@ func (e *Engine) Analyze(snap models.MarketSnapshot) models.MarketSignals {
 	// 7. Market Regime
 	sig.Regime, sig.RegimeConfidence = detectRegime(snap, sig)
 
+	// 8. Stop Hunt Probability
+	sig.StopHunt = calcStopHunt(snap, sig.LiquidityGravity, sig.LiquidationMagnet)
+
+	// 9. Exchange Divergence
+	sig.ExchangeDivergence = calcExchangeDivergence(snap.LongShortRatios)
+
 	return sig
 }
 
@@ -403,23 +409,28 @@ func calcVolatilityExpansion(snap models.MarketSnapshot) models.VolatilityExpans
 	switch {
 	case score >= 70:
 		state = models.VolStateExpanding
-		expectedMove = "High"
+		expectedMove = "High — volatility expanding, expect sharp directional move"
 	case score >= 50:
 		if oiChanging {
 			state = models.VolStateExpanding
+			expectedMove = "High — volatility expanding, expect sharp directional move"
 		} else {
 			state = models.VolStateElevated
+			expectedMove = "Medium — elevated volatility, directional bias unclear"
 		}
-		expectedMove = "Medium"
 	case score >= 30:
 		state = models.VolStateElevated
-		expectedMove = "Medium"
+		expectedMove = "Medium — elevated volatility, directional bias unclear"
 	case absRate < 0.0001 && math.Abs(snap.OpenInterest.OIChange1h) < 0.3:
 		state = models.VolStateCompressed
-		expectedMove = "Low — compression often precedes breakout"
+		expectedMove = "Low current volatility — breakout expansion likely"
 	default:
 		state = models.VolStateContracting
-		expectedMove = "Low"
+		if score >= 30 {
+			expectedMove = "Medium — volatility declining but not yet compressed"
+		} else {
+			expectedMove = "Low — stable market conditions"
+		}
 	}
 
 	return models.VolatilityExpansion{
@@ -440,4 +451,126 @@ func avgLongPct(ratios []models.LongShortRatio) float64 {
 		sum += r.LongPct
 	}
 	return sum / float64(len(ratios))
+}
+
+func calcStopHunt(snap models.MarketSnapshot, gravity models.LiquidityGravity, magnet *models.LiquidationMagnet) models.StopHuntSignal {
+	shortHuntProb := int(gravity.UpwardPull)
+	longHuntProb := int(gravity.DownwardPull)
+
+	rate := snap.FundingRate.Rate
+	if rate > 0.0003 {
+		longHuntProb += 15
+		shortHuntProb -= 15
+	} else if rate < -0.0003 {
+		shortHuntProb += 15
+		longHuntProb -= 15
+	}
+
+	avgLong := avgLongPct(snap.LongShortRatios)
+	if avgLong > 65 {
+		longHuntProb += 10
+		shortHuntProb -= 10
+	} else if avgLong < 40 {
+		shortHuntProb += 10
+		longHuntProb -= 10
+	}
+
+	total := shortHuntProb + longHuntProb
+	if total <= 0 {
+		return models.StopHuntSignal{ShortSideProb: 50, LongSideProb: 50, TargetSide: "unclear"}
+	}
+	shortHuntProb = shortHuntProb * 100 / total
+	longHuntProb = 100 - shortHuntProb
+
+	if shortHuntProb > 95 {
+		shortHuntProb = 95
+	}
+	if shortHuntProb < 5 {
+		shortHuntProb = 5
+	}
+	longHuntProb = 100 - shortHuntProb
+
+	targetSide := "longs"
+	targetPrice := gravity.DownwardTarget
+	if shortHuntProb > longHuntProb {
+		targetSide = "shorts"
+		targetPrice = gravity.UpwardTarget
+	}
+	if magnet != nil {
+		targetPrice = magnet.Price
+	}
+
+	reasoning := fmt.Sprintf(
+		"%.1f%% upward liquidity pull with %s funding — %s side more likely to be hunted first",
+		gravity.UpwardPull,
+		fundingDescription(rate),
+		targetSide,
+	)
+
+	return models.StopHuntSignal{
+		ShortSideProb: shortHuntProb,
+		LongSideProb:  longHuntProb,
+		TargetSide:    targetSide,
+		TargetPrice:   targetPrice,
+		Reasoning:     reasoning,
+	}
+}
+
+func fundingDescription(rate float64) string {
+	switch {
+	case rate > 0.0003:
+		return "elevated positive"
+	case rate > 0.0001:
+		return "positive"
+	case rate < -0.0003:
+		return "strongly negative"
+	case rate < -0.0001:
+		return "negative"
+	default:
+		return "neutral"
+	}
+}
+
+func calcExchangeDivergence(ratios []models.LongShortRatio) models.ExchangeDivergence {
+	if len(ratios) < 2 {
+		return models.ExchangeDivergence{}
+	}
+
+	maxLong := ratios[0]
+	minLong := ratios[0]
+	for _, r := range ratios {
+		if r.LongPct > maxLong.LongPct {
+			maxLong = r
+		}
+		if r.LongPct < minLong.LongPct {
+			minLong = r
+		}
+	}
+
+	spread := maxLong.LongPct - minLong.LongPct
+	detected := spread >= 5.0
+
+	signal := "Exchanges aligned — no divergence"
+	if detected {
+		huntSide := "short-side"
+		if maxLong.LongPct > 60 {
+			huntSide = "long-side"
+		}
+		signal = fmt.Sprintf(
+			"%s heavily long (%.1f%%) vs %s short-heavy (%.1f%%) — divergence suggests liquidity hunt likely. Watch for move toward %s liquidations.",
+			maxLong.Exchange, maxLong.LongPct,
+			minLong.Exchange, minLong.LongPct,
+			huntSide,
+		)
+	}
+
+	return models.ExchangeDivergence{
+		Detected:   detected,
+		MaxSpread:  math.Round(spread*10) / 10,
+		BullishEx:  maxLong.Exchange,
+		BearishEx:  minLong.Exchange,
+		BullishPct: maxLong.LongPct,
+		BearishPct: minLong.LongPct,
+		Signal:     signal,
+	}
 }

@@ -148,6 +148,26 @@ type VolatilityExpansion struct {
 	ExpectedMove  string          `json:"expected_move"`   // "High", "Medium", "Low"
 }
 
+// StopHuntSignal indicates which side is more likely to be hunted first
+type StopHuntSignal struct {
+	ShortSideProb int     `json:"short_side_prob"` // probability shorts get hunted first
+	LongSideProb  int     `json:"long_side_prob"`  // probability longs get hunted first
+	TargetSide    string  `json:"target_side"`    // "shorts" or "longs"
+	TargetPrice   float64 `json:"target_price"`   // most likely hunt target price
+	Reasoning     string  `json:"reasoning"`
+}
+
+// ExchangeDivergence captures cross-exchange long/short positioning divergence
+type ExchangeDivergence struct {
+	Detected   bool    `json:"detected"`
+	MaxSpread  float64 `json:"max_spread"`  // max long% difference between exchanges
+	BullishEx  string  `json:"bullish_ex"`  // exchange most long-heavy
+	BearishEx  string  `json:"bearish_ex"`  // exchange most short-heavy
+	BullishPct float64 `json:"bullish_pct"`
+	BearishPct float64 `json:"bearish_pct"`
+	Signal     string  `json:"signal"` // interpretation
+}
+
 // LiquidationMagnet represents a nearby liquidation cluster that may attract price
 type LiquidationMagnet struct {
 	Side        string  `json:"side"`        // "long" or "short"
@@ -168,8 +188,10 @@ type MarketSignals struct {
 	LiquidationMagnet      *LiquidationMagnet `json:"liquidation_magnet,omitempty"`
 	LiquidityGravity       LiquidityGravity  `json:"liquidity_gravity"`
 	Volatility             VolatilityExpansion `json:"volatility"`
-	LeverageImbalance      string             `json:"leverage_imbalance"` // "Longs overcrowded" / "Shorts overcrowded" / "Balanced"
-	SqueezeDirection       string             `json:"squeeze_direction"`  // "Long squeeze risk" / "Short squeeze risk" / "None"
+	LeverageImbalance      string               `json:"leverage_imbalance"` // "Longs overcrowded" / "Shorts overcrowded" / "Balanced"
+	SqueezeDirection       string               `json:"squeeze_direction"`  // "Long squeeze risk" / "Short squeeze risk" / "None"
+	StopHunt               StopHuntSignal       `json:"stop_hunt"`
+	ExchangeDivergence     ExchangeDivergence   `json:"exchange_divergence"`
 }
 
 type SnapshotWithAnalysis struct {
