@@ -46,6 +46,9 @@ func (e *Engine) Analyze(snap models.MarketSnapshot) models.MarketSignals {
 	// 10. Cascade Risk (must be last — depends on all other signals)
 	sig.CascadeRisk = calcCascadeRisk(snap, sig)
 
+	// 11. Liquidity Pressure Index (depends on gravity, funding, stop hunt, squeeze)
+	sig.LiquidityPressure = calcLiquidityPressure(snap, sig)
+
 	return sig
 }
 
@@ -660,6 +663,94 @@ func calcCascadeRisk(snap models.MarketSnapshot, sig models.MarketSignals) model
 		Level:       level,
 		Score:       score,
 		Factors:     factors,
+		Description: description,
+	}
+}
+
+func calcLiquidityPressure(snap models.MarketSnapshot, sig models.MarketSignals) models.LiquidityPressureIndex {
+	score := 0
+
+	// Factor 1 — Liquidity gravity direction (+/-40 max)
+	if sig.LiquidityGravity.UpwardPull > sig.LiquidityGravity.DownwardPull {
+		dominance := sig.LiquidityGravity.UpwardPull - sig.LiquidityGravity.DownwardPull
+		score += int(dominance * 0.4) // 100% dominance = +40
+	} else {
+		dominance := sig.LiquidityGravity.DownwardPull - sig.LiquidityGravity.UpwardPull
+		score -= int(dominance * 0.4)
+	}
+
+	// Factor 2 — Funding rate (+/-25 max)
+	rate := snap.FundingRate.Rate
+	if rate < -0.0003 {
+		score += 25 // very negative funding = shorts crowded = bullish pressure
+	} else if rate < -0.0001 {
+		score += 15
+	} else if rate < 0 {
+		score += 5
+	} else if rate > 0.0003 {
+		score -= 25
+	} else if rate > 0.0001 {
+		score -= 15
+	} else if rate > 0 {
+		score -= 5
+	}
+
+	// Factor 3 — Stop hunt direction (+/-20 max)
+	if sig.StopHunt.TargetSide == "shorts" {
+		score += int(float64(sig.StopHunt.ShortSideProb) * 0.2)
+	} else if sig.StopHunt.TargetSide == "longs" {
+		score -= int(float64(sig.StopHunt.LongSideProb) * 0.2)
+	}
+
+	// Factor 4 — Short/long squeeze probability (+/-15 max)
+	score += int(float64(sig.ShortSqueezeProbability) * 0.15)
+	score -= int(float64(sig.LongSqueezeProbability) * 0.15)
+
+	// Clamp to -100/+100
+	if score > 100 {
+		score = 100
+	}
+	if score < -100 {
+		score = -100
+	}
+
+	// Label and direction
+	var label, direction, description string
+	switch {
+	case score >= 60:
+		label = "Strong Squeeze Risk"
+		direction = "bullish"
+		description = "High probability short squeeze — price likely hunts upward liquidity"
+	case score >= 30:
+		label = "Bullish Pressure"
+		direction = "bullish"
+		description = "Liquidity favors upward move — shorts at risk"
+	case score >= 10:
+		label = "Mild Bullish Bias"
+		direction = "bullish"
+		description = "Slight upward liquidity pressure — no strong signal yet"
+	case score > -10:
+		label = "Neutral"
+		direction = "neutral"
+		description = "No clear directional pressure — market in equilibrium"
+	case score > -30:
+		label = "Mild Bearish Bias"
+		direction = "bearish"
+		description = "Slight downward liquidity pressure — no strong signal yet"
+	case score > -60:
+		label = "Bearish Pressure"
+		direction = "bearish"
+		description = "Liquidity favors downward move — longs at risk"
+	default:
+		label = "Strong Liquidation Risk"
+		direction = "bearish"
+		description = "High probability long liquidation — price likely hunts downward liquidity"
+	}
+
+	return models.LiquidityPressureIndex{
+		Score:       score,
+		Label:       label,
+		Direction:   direction,
 		Description: description,
 	}
 }

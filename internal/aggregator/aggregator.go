@@ -137,8 +137,8 @@ func pctChange(from, to float64) float64 {
 
 // ─── Private fetch methods ────────────────────────────────────────────────────
 
-// fetchFundingRate fetches the current funding rate from Bybit's ticker endpoint.
-func (a *Aggregator) fetchFundingRate(ctx context.Context, symbol string) (models.FundingRate, error) {
+// fetchBybitFundingRate fetches the current funding rate from Bybit's ticker endpoint.
+func (a *Aggregator) fetchBybitFundingRate(ctx context.Context, symbol string) (float64, int64, error) {
 	u := fmt.Sprintf(
 		"https://api.bybit.com/v5/market/tickers?category=linear&symbol=%s",
 		perpSymbol(symbol),
@@ -146,22 +146,60 @@ func (a *Aggregator) fetchFundingRate(ctx context.Context, symbol string) (model
 
 	var raw bybitResp[bybitTickerResult]
 	if err := a.publicGet(ctx, u, &raw); err != nil {
-		return models.FundingRate{}, fmt.Errorf("fetchFundingRate: %w", err)
+		return 0, 0, fmt.Errorf("fetchBybitFundingRate: %w", err)
 	}
 	if len(raw.Result.List) == 0 {
-		return models.FundingRate{}, fmt.Errorf("fetchFundingRate: no data for %s", symbol)
+		return 0, 0, fmt.Errorf("fetchBybitFundingRate: no data for %s", symbol)
 	}
 
 	item := raw.Result.List[0]
 	rate, _ := strconv.ParseFloat(item.FundingRate, 64)
 	nextFunding, _ := strconv.ParseInt(item.NextFundingTime, 10, 64)
+	return rate, nextFunding, nil
+}
 
-	return models.FundingRate{
-		Symbol:          symbol,
-		Rate:            rate,
-		NextFundingTime: nextFunding,
-		Timestamp:       time.Now().UTC(),
-	}, nil
+// fetchBinanceFundingRate fetches the current funding rate from Binance premium index.
+func (a *Aggregator) fetchBinanceFundingRate(ctx context.Context, symbol string) (float64, error) {
+	u := fmt.Sprintf(
+		"https://fapi.binance.com/fapi/v1/premiumIndex?symbol=%s",
+		perpSymbol(symbol),
+	)
+
+	var raw struct {
+		Symbol         string `json:"symbol"`
+		LastFundingRate string `json:"lastFundingRate"`
+		NextFundingTime int64  `json:"nextFundingTime"`
+	}
+	if err := a.publicGet(ctx, u, &raw); err != nil {
+		return 0, fmt.Errorf("fetchBinanceFundingRate: %w", err)
+	}
+	rate, _ := strconv.ParseFloat(raw.LastFundingRate, 64)
+	return rate, nil
+}
+
+// fetchOKXFundingRate fetches the current funding rate from OKX.
+func (a *Aggregator) fetchOKXFundingRate(ctx context.Context, symbol string) (float64, error) {
+	instID := strings.ToUpper(symbol) + "-USDT-SWAP"
+	u := fmt.Sprintf(
+		"https://www.okx.com/api/v5/public/funding-rate?instId=%s",
+		instID,
+	)
+
+	var raw struct {
+		Code string `json:"code"`
+		Data []struct {
+			InstID string `json:"instId"`
+			FundingRate string `json:"fundingRate"`
+		} `json:"data"`
+	}
+	if err := a.publicGet(ctx, u, &raw); err != nil {
+		return 0, fmt.Errorf("fetchOKXFundingRate: %w", err)
+	}
+	if len(raw.Data) == 0 {
+		return 0, fmt.Errorf("fetchOKXFundingRate: no data for %s", symbol)
+	}
+	rate, _ := strconv.ParseFloat(raw.Data[0].FundingRate, 64)
+	return rate, nil
 }
 
 // fetchOpenInterest fetches OI history from Bybit and a current price for
@@ -525,13 +563,49 @@ func (a *Aggregator) FetchSnapshot(ctx context.Context, symbol string) (models.M
 
 	go func() {
 		defer wg.Done()
-		fr, err := a.fetchFundingRate(ctx, symbol)
-		if err != nil {
-			log.Printf("aggregator: %v", err)
-			return
+		var rates []models.ExchangeFundingRate
+		var sum float64
+		var count int
+		var nextFunding int64
+
+		// Bybit
+		if r, nf, err := a.fetchBybitFundingRate(ctx, symbol); err != nil {
+			log.Printf("aggregator: fetchBybitFundingRate: %v", err)
+		} else {
+			rates = append(rates, models.ExchangeFundingRate{Exchange: "Bybit", Rate: r, RatePct: r * 100})
+			sum += r
+			count++
+			nextFunding = nf
+		}
+		// Binance
+		if r, err := a.fetchBinanceFundingRate(ctx, symbol); err != nil {
+			log.Printf("aggregator: fetchBinanceFundingRate: %v", err)
+		} else {
+			rates = append(rates, models.ExchangeFundingRate{Exchange: "Binance", Rate: r, RatePct: r * 100})
+			sum += r
+			count++
+		}
+		// OKX
+		if r, err := a.fetchOKXFundingRate(ctx, symbol); err != nil {
+			log.Printf("aggregator: fetchOKXFundingRate: %v", err)
+		} else {
+			rates = append(rates, models.ExchangeFundingRate{Exchange: "OKX", Rate: r, RatePct: r * 100})
+			sum += r
+			count++
+		}
+
+		avgRate := 0.0
+		if count > 0 {
+			avgRate = sum / float64(count)
 		}
 		mu.Lock()
-		snap.FundingRate = fr
+		snap.FundingRate = models.FundingRate{
+			Symbol:          symbol,
+			Rate:            avgRate,
+			NextFundingTime: nextFunding,
+			Timestamp:       time.Now().UTC(),
+		}
+		snap.ExchangeFunding = rates
 		mu.Unlock()
 	}()
 

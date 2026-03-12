@@ -155,6 +155,9 @@ LIQUIDATION CASCADE RISK: %s (%d/100)
 %s
 Factors: %s
 
+LIQUIDITY PRESSURE INDEX: %d/100 (%s)
+%s
+
 RAW DATA:
 Funding Rate: %.4f%%
 Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
@@ -207,6 +210,9 @@ Respond ONLY with a valid JSON object, no markdown, no explanation:
 		sigs.CascadeRisk.Score,
 		sigs.CascadeRisk.Description,
 		strings.Join(sigs.CascadeRisk.Factors, "; "),
+		sigs.LiquidityPressure.Score,
+		sigs.LiquidityPressure.Label,
+		sigs.LiquidityPressure.Description,
 		snap.FundingRate.Rate*100,
 		snap.OpenInterest.OIUsd/1_000_000,
 		snap.OpenInterest.OIChange1h,

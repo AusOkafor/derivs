@@ -9,6 +9,13 @@ type FundingRate struct {
 	Timestamp       time.Time `json:"timestamp"`
 }
 
+// ExchangeFundingRate holds per-exchange funding rate for display.
+type ExchangeFundingRate struct {
+	Exchange string  `json:"exchange"`
+	Rate     float64 `json:"rate"`
+	RatePct  float64 `json:"rate_pct"` // rate * 100
+}
+
 type OpenInterest struct {
 	Symbol     string    `json:"symbol"`
 	OIUsd      float64   `json:"oi_usd"`
@@ -42,12 +49,13 @@ type LongShortRatio struct {
 }
 
 type MarketSnapshot struct {
-	Symbol          string           `json:"symbol"`
-	FundingRate     FundingRate      `json:"funding_rate"`
-	OpenInterest    OpenInterest     `json:"open_interest"`
-	LiquidationMap  LiquidationMap   `json:"liquidation_map"`
-	LongShortRatios []LongShortRatio `json:"long_short_ratios"`
-	Timestamp       time.Time        `json:"timestamp"`
+	Symbol           string                `json:"symbol"`
+	FundingRate      FundingRate           `json:"funding_rate"`
+	ExchangeFunding  []ExchangeFundingRate `json:"exchange_funding"`
+	OpenInterest     OpenInterest          `json:"open_interest"`
+	LiquidationMap   LiquidationMap        `json:"liquidation_map"`
+	LongShortRatios  []LongShortRatio      `json:"long_short_ratios"`
+	Timestamp        time.Time             `json:"timestamp"`
 }
 
 type AIAnalysis struct {
@@ -165,6 +173,14 @@ type CascadeRiskScore struct {
 	Description string   `json:"description"`
 }
 
+// LiquidityPressureIndex combines gravity, funding, stop hunt, and squeeze into a single -100 to +100 score.
+type LiquidityPressureIndex struct {
+	Score       int    `json:"score"`       // -100 to +100
+	Label       string `json:"label"`       // "Strong Squeeze Risk", "Neutral", "Strong Liquidation Risk"
+	Direction   string `json:"direction"`  // "bullish", "bearish", "neutral"
+	Description string `json:"description"`
+}
+
 // ExchangeDivergence captures cross-exchange long/short positioning divergence
 type ExchangeDivergence struct {
 	Detected   bool    `json:"detected"`
@@ -201,6 +217,7 @@ type MarketSignals struct {
 	StopHunt               StopHuntSignal       `json:"stop_hunt"`
 	ExchangeDivergence     ExchangeDivergence   `json:"exchange_divergence"`
 	CascadeRisk            CascadeRiskScore     `json:"cascade_risk"`
+	LiquidityPressure      LiquidityPressureIndex `json:"liquidity_pressure"`
 }
 
 type SnapshotWithAnalysis struct {
