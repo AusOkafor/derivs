@@ -151,6 +151,10 @@ Detected: %v (spread: %.1f%%)
 %s long-heavy: %.1f%% | %s short-heavy: %.1f%%
 Signal: %s
 
+LIQUIDATION CASCADE RISK: %s (%d/100)
+%s
+Factors: %s
+
 RAW DATA:
 Funding Rate: %.4f%%
 Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
@@ -199,6 +203,10 @@ Respond ONLY with a valid JSON object, no markdown, no explanation:
 		sigs.ExchangeDivergence.BearishEx,
 		sigs.ExchangeDivergence.BearishPct,
 		sigs.ExchangeDivergence.Signal,
+		sigs.CascadeRisk.Level,
+		sigs.CascadeRisk.Score,
+		sigs.CascadeRisk.Description,
+		strings.Join(sigs.CascadeRisk.Factors, "; "),
 		snap.FundingRate.Rate*100,
 		snap.OpenInterest.OIUsd/1_000_000,
 		snap.OpenInterest.OIChange1h,

@@ -157,6 +157,14 @@ type StopHuntSignal struct {
 	Reasoning     string  `json:"reasoning"`
 }
 
+// CascadeRiskScore indicates likelihood of liquidation cascade
+type CascadeRiskScore struct {
+	Level       string   `json:"level"`        // "LOW", "MEDIUM", "HIGH", "CRITICAL"
+	Score       int      `json:"score"`        // 0-100
+	Factors     []string `json:"factors"`     // contributing signals
+	Description string   `json:"description"`
+}
+
 // ExchangeDivergence captures cross-exchange long/short positioning divergence
 type ExchangeDivergence struct {
 	Detected   bool    `json:"detected"`
@@ -192,6 +200,7 @@ type MarketSignals struct {
 	SqueezeDirection       string               `json:"squeeze_direction"`  // "Long squeeze risk" / "Short squeeze risk" / "None"
 	StopHunt               StopHuntSignal       `json:"stop_hunt"`
 	ExchangeDivergence     ExchangeDivergence   `json:"exchange_divergence"`
+	CascadeRisk            CascadeRiskScore     `json:"cascade_risk"`
 }
 
 type SnapshotWithAnalysis struct {
