@@ -17,6 +17,7 @@ import (
 	"derivs-backend/internal/config"
 	"derivs-backend/internal/feargreed"
 	"derivs-backend/internal/handlers"
+	"derivs-backend/internal/models"
 	"derivs-backend/internal/notify"
 	"derivs-backend/internal/supabase"
 	"derivs-backend/internal/worker"
@@ -44,6 +45,11 @@ func main() {
 	calc := feargreed.New()
 
 	tg := notify.NewTelegram(cfg.TelegramBotToken)
+	alerts.SetOnHighAlert(func(a models.Alert) {
+		if err := tg.PostTopAlert(a); err != nil {
+			log.Printf("alerts: PostTopAlert: %v", err)
+		}
+	})
 	sb := supabase.New(cfg.SupabaseURL, cfg.SupabaseServiceKey)
 	wrk := worker.New(agg, detector, tg, sb, calc)
 

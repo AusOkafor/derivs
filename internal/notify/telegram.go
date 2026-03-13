@@ -89,6 +89,48 @@ func severityEmoji(severity string) string {
 	}
 }
 
+// PostToChannel posts a message to the public channel @derivlens_signals.
+func (t *TelegramNotifier) PostToChannel(message string) error {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.botToken)
+	payload := map[string]interface{}{
+		"chat_id":    "@derivlens_signals",
+		"text":       message,
+		"parse_mode": "HTML",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("telegram: marshal channel request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("telegram: build channel request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("telegram: post to channel: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram: channel unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// PostTopAlert posts a HIGH severity alert to the public channel as a free preview.
+func (t *TelegramNotifier) PostTopAlert(alert models.Alert) error {
+	firstLine := alert.Message
+	if idx := strings.Index(alert.Message, "\n"); idx > 0 {
+		firstLine = alert.Message[:idx]
+	}
+	msg := fmt.Sprintf(
+		"🚨 HIGH ALERT — %s\n%s\n\nFull signal → derivlens.io\nGet alerts → t.me/derivlens_signals",
+		alert.Symbol,
+		firstLine,
+	)
+	return t.PostToChannel(msg)
+}
+
 // VerifyAuth validates Telegram Login Widget auth data using HMAC-SHA256.
 // See https://core.telegram.org/widgets/login#checking-authorization
 func (t *TelegramNotifier) VerifyAuth(data map[string]string) bool {

@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"derivs-backend/internal/models"
+	"derivs-backend/internal/signals"
 )
 
 const briefSymbols = "BTC, ETH, SOL, ARB, DOGE, AVAX"
@@ -183,6 +185,40 @@ func (w *Worker) SendMorningBrief(ctx context.Context) {
 		}
 	}
 	log.Printf("worker: morning brief sent to %d free, %d basic, %d pro subscribers", sentFree, sentBasic, sentPro)
+
+	// Public channel morning signal — post after Pro briefs
+	if bs, ok := snapshots["BTC"]; ok {
+		engine := signals.New()
+		btcSignals := engine.Analyze(bs.snap)
+		publicMessage := fmt.Sprintf(
+			`🔍 <b>DerivLens Morning Signal</b> — %s UTC
+
+<b>BTC</b>
+- Cascade Risk: %s (%d/100)
+- Liquidity Pressure: %+d (%s)
+- Regime: %s %d%%
+- Stop Hunt Target: %s near $%.0f
+- Gravity: %.1f%% %s
+
+<b>Top setup across 12 symbols tracked live.</b>
+📊 Full dashboard → derivlens.io
+🔔 Subscribe for alerts → /start`,
+			now.Format("02 Jan 2006"),
+			btcSignals.CascadeRisk.Level,
+			btcSignals.CascadeRisk.Score,
+			btcSignals.LiquidityPressure.Score,
+			btcSignals.LiquidityPressure.Label,
+			btcSignals.Regime,
+			btcSignals.RegimeConfidence,
+			btcSignals.StopHunt.TargetSide,
+			btcSignals.StopHunt.TargetPrice,
+			math.Max(btcSignals.LiquidityGravity.UpwardPull, btcSignals.LiquidityGravity.DownwardPull),
+			btcSignals.LiquidityGravity.Dominant,
+		)
+		if err := w.notifier.PostToChannel(publicMessage); err != nil {
+			log.Printf("worker: brief PostToChannel: %v", err)
+		}
+	}
 }
 
 func (w *Worker) buildBrief(

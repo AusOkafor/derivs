@@ -16,6 +16,14 @@ var (
 	ruleCooldownMu sync.Mutex
 )
 
+// OnHighAlert is called when a HIGH severity alert fires. Set via SetOnHighAlert.
+var OnHighAlert func(alert models.Alert)
+
+// SetOnHighAlert sets the callback invoked when a HIGH severity alert fires.
+func SetOnHighAlert(fn func(alert models.Alert)) {
+	OnHighAlert = fn
+}
+
 func checkAndSetCooldown(symbol, ruleID string, duration time.Duration) bool {
 	key := symbol + "-" + ruleID
 	ruleCooldownMu.Lock()
@@ -134,13 +142,17 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	now := time.Now().UTC()
 
 	add := func(id, msg, severity string) {
-		out = append(out, models.Alert{
+		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:    snap.Symbol,
 			Message:   msg,
 			Severity:  severity,
 			Timestamp: now,
-		})
+		}
+		out = append(out, a)
+		if severity == "high" && OnHighAlert != nil {
+			OnHighAlert(a)
+		}
 	}
 	symbol := snap.Symbol
 
@@ -301,13 +313,17 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			whaleTag,
 		)
 
-		out = append(out, models.Alert{
+		a := models.Alert{
 			ID:        zoneID,
 			Symbol:    symbol,
 			Message:   message,
 			Severity:  severity,
 			Timestamp: now,
-		})
+		}
+		out = append(out, a)
+		if severity == "high" && OnHighAlert != nil {
+			OnHighAlert(a)
+		}
 		}
 	}
 
@@ -326,25 +342,33 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Rule 9: Short squeeze probability high ─────────────────────────────────
 	if sigs.ShortSqueezeProbability >= 65 && !checkAndSetCooldown(symbol, "short-squeeze", 30*time.Minute) {
 		id := fmt.Sprintf("short-squeeze-%d", sigs.ShortSqueezeProbability/10*10)
-		out = append(out, models.Alert{
+		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:    snap.Symbol,
 			Message:   fmt.Sprintf("Short squeeze probability at %d%% — negative funding, shorts overcrowded, liquidation clusters above price. Watch for rapid upward move.", sigs.ShortSqueezeProbability),
 			Severity:  "high",
 			Timestamp: now,
-		})
+		}
+		out = append(out, a)
+		if OnHighAlert != nil {
+			OnHighAlert(a)
+		}
 	}
 
 	// ── Rule 10: Long squeeze probability high ──────────────────────────────────
 	if sigs.LongSqueezeProbability >= 65 && !checkAndSetCooldown(symbol, "long-squeeze", 30*time.Minute) {
 		id := fmt.Sprintf("long-squeeze-%d", sigs.LongSqueezeProbability/10*10)
-		out = append(out, models.Alert{
+		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:    snap.Symbol,
 			Message:   fmt.Sprintf("Long squeeze probability at %d%% — elevated funding, longs overcrowded, liquidation clusters below price. Watch for rapid downward move.", sigs.LongSqueezeProbability),
 			Severity:  "high",
 			Timestamp: now,
-		})
+		}
+		out = append(out, a)
+		if OnHighAlert != nil {
+			OnHighAlert(a)
+		}
 	}
 
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
@@ -367,25 +391,33 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
 
 		if !checkAndSetCooldown(symbol, "liq-magnet", 30*time.Minute) {
-			out = append(out, models.Alert{
+			a := models.Alert{
 				ID:       fmt.Sprintf("%s-%s", snap.Symbol, id),
 				Symbol:   snap.Symbol,
 				Message:  fmt.Sprintf("Liquidity sweep alert: large %s cluster at %s (%.2f%% away)\n\nMarket context:\n• %s\n• %s\n• %s\n\nSweep probability: %d%%", m.Side, formatPrice(m.Price), m.Distance, fundingCtx, oiCtx, sigs.LeverageImbalance, m.Probability),
 				Severity: "high",
 				Timestamp: now,
-			})
+			}
+			out = append(out, a)
+			if OnHighAlert != nil {
+				OnHighAlert(a)
+			}
 		}
 	}
 
 	// ── Rule 12: Market regime change to Liquidation Event ──────────────────────
 	if sigs.Regime == models.RegimeLiquidation && !checkAndSetCooldown(symbol, "regime-liquidation", 60*time.Minute) {
-		out = append(out, models.Alert{
-				ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
-				Symbol:    snap.Symbol,
+		a := models.Alert{
+			ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
+			Symbol:    snap.Symbol,
 			Message:   "Market regime: Liquidation Event detected. OI dropping sharply — forced position closures underway. Potential local top/bottom forming.",
 			Severity:  "high",
 			Timestamp: now,
-		})
+		}
+		out = append(out, a)
+		if OnHighAlert != nil {
+			OnHighAlert(a)
+		}
 	}
 
 	// If a liq-magnet alert exists for this symbol, remove ALL zone alerts
