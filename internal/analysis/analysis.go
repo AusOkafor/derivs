@@ -231,7 +231,7 @@ func formatMagnet(m *models.LiquidationMagnet) string {
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
-func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, sigs models.MarketSignals, tier string) (models.AIAnalysis, error) {
+func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, sigs models.MarketSignals, tier string, userAPIKey string, preferredModel string) (models.AIAnalysis, error) {
 	if !IsAIEnabled() {
 		return models.AIAnalysis{
 			Symbol:      snap.Symbol,
@@ -265,8 +265,17 @@ func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, sigs
 	}
 	log.Printf("analysis: generating for %s, prompt[:200]: %s", snap.Symbol, promptPreview)
 
+	apiKey := a.apiKey
+	if userAPIKey != "" {
+		apiKey = userAPIKey
+	}
+	model := "claude-haiku-4-5-20251001"
+	if preferredModel != "" {
+		model = preferredModel
+	}
+
 	reqBody := anthropicRequest{
-		Model:     "claude-haiku-4-5-20251001",
+		Model:     model,
 		MaxTokens: 1024,
 		System:    "You are a crypto derivatives analyst. Always respond with valid JSON only.",
 		Messages:  []anthropicMessage{{Role: "user", Content: prompt}},
@@ -287,7 +296,7 @@ func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, sigs
 		log.Printf("analysis: build request: %v", err)
 		return errFallback(snap.Symbol), fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("x-api-key", a.apiKey)
+	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("content-type", "application/json")
 

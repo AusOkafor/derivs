@@ -39,6 +39,7 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 
 	tier := ""
+	var userAPIKey, preferredModel string
 	if username != "" {
 		var err error
 		tier, _, err = h.db.GetSubscriberTier(r.Context(), username)
@@ -51,6 +52,15 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		if tier == "" {
 			tier = "free"
+		}
+		settings, _ := h.db.GetUserSettings(r.Context(), username)
+		if settings != nil {
+			userAPIKey = settings.AnthropicAPIKey
+			preferredModel = settings.PreferredModel
+		}
+		// Allow test key override for Settings page "Test Connection"
+		if override := r.Header.Get("X-API-Key-Override"); override != "" {
+			userAPIKey = override
 		}
 	}
 
@@ -84,7 +94,7 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	engine := signals.New()
 	sigs := engine.Analyze(snap)
 
-	ai, err := h.analyzer.Analyze(ctx, snap, sigs, tier)
+	ai, err := h.analyzer.Analyze(ctx, snap, sigs, tier, userAPIKey, preferredModel)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
@@ -449,6 +459,88 @@ func (h *Handler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unsubscribed"})
+}
+
+// ─── Settings ──────────────────────────────────────────────────────────────────
+
+// Settings routes GET and POST /api/settings to the appropriate handler.
+func (h *Handler) Settings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.GetSettings(w, r)
+	case http.MethodPost:
+		h.SaveSettings(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+// GetSettings handles GET /api/settings?username=xxx
+func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
+		return
+	}
+	settings, err := h.db.GetUserSettings(r.Context(), username)
+	if err != nil {
+		log.Printf("GetSettings: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get settings"})
+		return
+	}
+	if settings == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"username":             username,
+			"anthropic_api_key_set": false,
+			"preferred_model":      "claude-haiku-4-5-20251001",
+		})
+		return
+	}
+	// Don't return the raw API key to the client; indicate if one is set
+	hasKey := settings.AnthropicAPIKey != ""
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"username":             settings.Username,
+		"anthropic_api_key_set": hasKey,
+		"preferred_model":      settings.PreferredModel,
+	})
+}
+
+// SaveSettings handles POST /api/settings
+func (h *Handler) SaveSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username        string `json:"username"`
+		AnthropicAPIKey string `json:"anthropic_api_key"`
+		PreferredModel  string `json:"preferred_model"`
+		ClearAPIKey     bool   `json:"clear_api_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username is required"})
+		return
+	}
+	settings := supabase.UserSettings{
+		Username:       req.Username,
+		PreferredModel: req.PreferredModel,
+	}
+	if settings.PreferredModel == "" {
+		settings.PreferredModel = "claude-haiku-4-5-20251001"
+	}
+	if req.ClearAPIKey {
+		settings.AnthropicAPIKey = ""
+	} else if req.AnthropicAPIKey != "" {
+		settings.AnthropicAPIKey = req.AnthropicAPIKey
+	} else {
+		// Preserve existing key when not provided
+		existing, _ := h.db.GetUserSettings(r.Context(), req.Username)
+		if existing != nil {
+			settings.AnthropicAPIKey = existing.AnthropicAPIKey
+		}
+	}
+	if err := h.db.SaveUserSettings(r.Context(), settings); err != nil {
+		log.Printf("SaveSettings: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save settings"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
 // ─── Billing ───────────────────────────────────────────────────────────────────

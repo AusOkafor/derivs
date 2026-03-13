@@ -78,6 +78,7 @@ func main() {
 	mux.HandleFunc("/api/billing/portal", h.CreatePortal)
 	mux.HandleFunc("/api/billing/webhook", h.StripeWebhook)
 	mux.HandleFunc("/api/billing/status", h.GetBillingStatus)
+	mux.HandleFunc("/api/settings", h.Settings)
 	mux.HandleFunc("/api/webhook/telegram", h.TelegramWebhook)
 	mux.HandleFunc("/api/admin/ai/pause", h.PauseAI)
 	mux.HandleFunc("/api/admin/ai/resume", h.ResumeAI)
@@ -93,8 +94,8 @@ func main() {
 func corsMiddleware(allowedOrigins string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigins)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Key")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Key, X-API-Key-Override")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

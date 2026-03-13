@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"derivs-backend/internal/models"
@@ -504,6 +505,63 @@ func (c *Client) LogAlert(ctx context.Context, subscriberID, symbol, alertID str
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("supabase: LogAlert: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// UserSettings holds user preferences stored in user_settings table.
+type UserSettings struct {
+	Username        string `json:"username"`
+	AnthropicAPIKey string `json:"anthropic_api_key"`
+	PreferredModel  string `json:"preferred_model"`
+}
+
+// GetUserSettings returns user settings for the given username.
+func (c *Client) GetUserSettings(ctx context.Context, username string) (*UserSettings, error) {
+	reqURL := fmt.Sprintf("%s/rest/v1/user_settings?username=eq.%s&select=username,anthropic_api_key,preferred_model", c.baseURL, url.QueryEscape(username))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetUserSettings: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetUserSettings: status %d", resp.StatusCode)
+	}
+	var rows []UserSettings
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("supabase: GetUserSettings decode: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
+}
+
+// SaveUserSettings upserts user settings.
+func (c *Client) SaveUserSettings(ctx context.Context, settings UserSettings) error {
+	url := c.baseURL + "/rest/v1/user_settings?on_conflict=username"
+	body, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("supabase: marshal settings: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal,resolution=merge-duplicates")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: SaveUserSettings: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("supabase: SaveUserSettings: status %d", resp.StatusCode)
 	}
 	return nil
 }

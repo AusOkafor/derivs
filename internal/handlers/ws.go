@@ -50,7 +50,7 @@ func (hub *Hub) getOrFetch(ctx context.Context, symbol string) (models.SnapshotW
 	engine := signals.New()
 	sigs := engine.Analyze(snap)
 
-	ai, _ := hub.handler.analyzer.Analyze(ctx, snap, sigs, "free") // WebSocket has no user context; use free tier
+	ai, _ := hub.handler.analyzer.Analyze(ctx, snap, sigs, "free", "", "") // WebSocket has no user context; use free tier
 
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
