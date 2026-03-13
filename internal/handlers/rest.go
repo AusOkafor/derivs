@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -42,6 +43,9 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		var err error
 		tier, _, err = h.db.GetSubscriberTier(r.Context(), username)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			log.Printf("GetSnapshot: GetSubscriberTier(%s): %v", username, err)
 			sentry.CaptureException(err)
 		}
@@ -66,6 +70,9 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		sentry.CaptureException(err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -79,6 +86,9 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	ai, err := h.analyzer.Analyze(ctx, snap, sigs, tier)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		sentry.CaptureException(err)
 		ai = models.AIAnalysis{Symbol: symbol, Summary: "Analysis temporarily unavailable", Sentiment: "neutral", Confidence: 0, GeneratedAt: time.Now().UTC()}
 	}
@@ -215,6 +225,9 @@ func (h *Handler) GetAlerts(w http.ResponseWriter, r *http.Request) {
 
 	snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		sentry.CaptureException(err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -249,6 +262,9 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 			symbol = strings.TrimSpace(symbol)
 			snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
 				sentry.CaptureException(err)
 				log.Printf("tickers FetchSnapshot %s: %v", symbol, err)
 				return
