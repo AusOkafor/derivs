@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"derivs-backend/internal/analysis"
 	"derivs-backend/internal/billing"
 	"derivs-backend/internal/models"
@@ -42,6 +43,7 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		tier, _, err = h.db.GetSubscriberTier(r.Context(), username)
 		if err != nil {
 			log.Printf("GetSnapshot: GetSubscriberTier(%s): %v", username, err)
+			sentry.CaptureException(err)
 		}
 		if tier == "" {
 			tier = "free"
@@ -64,6 +66,7 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
 	if err != nil {
+		sentry.CaptureException(err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -74,7 +77,11 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	engine := signals.New()
 	sigs := engine.Analyze(snap)
 
-	ai, _ := h.analyzer.Analyze(ctx, snap, sigs, tier)
+	ai, err := h.analyzer.Analyze(ctx, snap, sigs, tier)
+	if err != nil {
+		sentry.CaptureException(err)
+		ai = models.AIAnalysis{Symbol: symbol, Summary: "Analysis temporarily unavailable", Sentiment: "neutral", Confidence: 0, GeneratedAt: time.Now().UTC()}
+	}
 
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
@@ -208,6 +215,7 @@ func (h *Handler) GetAlerts(w http.ResponseWriter, r *http.Request) {
 
 	snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
 	if err != nil {
+		sentry.CaptureException(err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -241,6 +249,7 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 			symbol = strings.TrimSpace(symbol)
 			snap, err := h.aggregator.FetchSnapshot(ctx, symbol)
 			if err != nil {
+				sentry.CaptureException(err)
 				log.Printf("tickers FetchSnapshot %s: %v", symbol, err)
 				return
 			}
@@ -504,15 +513,18 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		case "checkout.session.completed":
 			if u.TelegramUsername != "" {
 				if err := h.db.UpdateSubscriberTier(ctx, u.TelegramUsername, u.Tier, u.CustomerID, u.SubscriptionID, u.Status); err != nil {
+					sentry.CaptureException(err)
 					log.Printf("billing: UpdateSubscriberTier(%s): %v", u.TelegramUsername, err)
 				}
 			}
 		case "customer.subscription.deleted":
 			if err := h.db.UpdateSubscriberTierByStripeID(ctx, u.CustomerID, u.SubscriptionID, u.Tier, u.Status); err != nil {
+				sentry.CaptureException(err)
 				log.Printf("billing: UpdateSubscriberTierByStripeID: %v", err)
 			}
 		case "customer.subscription.updated":
 			if err := h.db.UpdateSubscriberTierByStripeID(ctx, u.CustomerID, u.SubscriptionID, "", u.Status); err != nil {
+				sentry.CaptureException(err)
 				log.Printf("billing: UpdateSubscriberTierByStripeID: %v", err)
 			}
 		}
@@ -552,6 +564,7 @@ func (h *Handler) CreatePortal(w http.ResponseWriter, r *http.Request) {
 
 	customerID, err := h.db.GetSubscriberStripeCustomerID(r.Context(), username)
 	if err != nil {
+		sentry.CaptureException(err)
 		log.Printf("billing: GetSubscriberStripeCustomerID(%s): %v", username, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get customer"})
 		return
@@ -582,6 +595,7 @@ func (h *Handler) GetBillingStatus(w http.ResponseWriter, r *http.Request) {
 
 	tier, status, err := h.db.GetSubscriberTier(r.Context(), username)
 	if err != nil {
+		sentry.CaptureException(err)
 		log.Printf("billing: GetSubscriberTier(%s): %v", username, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get tier"})
 		return

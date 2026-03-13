@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"derivs-backend/internal/aggregator"
 	"derivs-backend/internal/alerts"
 	"derivs-backend/internal/feargreed"
@@ -165,6 +166,13 @@ func (w *Worker) runCyclePro(ctx context.Context) {
 // proOnly: if true, only pro-tier subscribers; if false, free and basic tiers.
 // Returns the count of filtered subscribers for logging.
 func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
+	defer func() {
+		if r := recover(); r != nil {
+			sentry.CurrentHub().Recover(r)
+			sentry.Flush(2 * time.Second)
+			log.Printf("worker panic recovered: %v", r)
+		}
+	}()
 	sentThisCycle := make(map[string]bool)
 
 	subscribers, err := w.db.GetActiveSubscribers(ctx)

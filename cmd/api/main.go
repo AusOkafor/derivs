@@ -4,7 +4,10 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/joho/godotenv"
 	"derivs-backend/internal/aggregator"
 	"derivs-backend/internal/alerts"
@@ -21,7 +24,16 @@ import (
 )
 
 func main() {
-	_ = godotenv.Load() // no-op in production where env vars are set directly
+	_ = godotenv.Load() // load before Sentry so APP_ENV is available from .env
+	err := sentry.Init(sentry.ClientOptions{
+		Dsn:              "https://ZxPSh1VHUNDDqjhzQiV17bnt@s2296794.eu-fsn-3.betterstackdata.com/2296794",
+		TracesSampleRate: 0.1,
+		Environment:      os.Getenv("APP_ENV"),
+	})
+	if err != nil {
+		log.Printf("sentry init failed: %v", err)
+	}
+	defer sentry.Flush(2 * time.Second)
 
 	cfg := config.Load()
 
