@@ -15,7 +15,7 @@ import (
 )
 
 const briefSymbols = "BTC, ETH, SOL, ARB, DOGE, AVAX"
-const upgradeCTA = "\n\n<i>Upgrade to Pro for all 6 symbols → derivlens-pro.vercel.app</i>"
+const upgradeCTA = "\n\n<i>Upgrade to Pro for all 12 symbols → derivlens-pro.vercel.app</i>"
 
 type symLongPct struct {
 	sym     string
