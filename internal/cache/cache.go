@@ -15,9 +15,10 @@ type entry struct {
 }
 
 type Cache struct {
-	mu    sync.RWMutex
-	store map[string]entry
-	ttl   time.Duration
+	mu           sync.RWMutex
+	store        map[string]entry
+	ttl          time.Duration
+	lastFetchTime time.Time
 }
 
 func New(ttlSeconds int) *Cache {
@@ -41,6 +42,7 @@ func (c *Cache) Set(symbol string, data models.SnapshotWithAnalysis) {
 		data:      data,
 		expiresAt: time.Now().Add(c.ttl),
 	}
+	c.lastFetchTime = time.Now()
 }
 
 func (c *Cache) Get(symbol string) (models.SnapshotWithAnalysis, bool) {
@@ -73,4 +75,18 @@ func (c *Cache) purgeExpired() {
 			delete(c.store, k)
 		}
 	}
+}
+
+// Size returns the number of cached symbols.
+func (c *Cache) Size() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.store)
+}
+
+// LastFetchTime returns the most recent cache update.
+func (c *Cache) LastFetchTime() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastFetchTime
 }

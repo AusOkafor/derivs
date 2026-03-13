@@ -44,7 +44,7 @@ func main() {
 		billingClient = billing.New(cfg.StripeSecretKey, cfg.StripeWebhookSecret)
 	}
 
-	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, cfg.AdminSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro)
+	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, cfg.AdminSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro, wrk)
 	hub := handlers.NewHub(h)
 
 	mux := http.NewServeMux()

@@ -15,9 +15,16 @@ import (
 	"derivs-backend/internal/models"
 )
 
+type exchangeHealth struct {
+	lastSuccess time.Time
+	lastError   string
+}
+
 type Aggregator struct {
 	cfg        *config.Config
 	httpClient *http.Client
+	health     map[string]exchangeHealth
+	mu         sync.RWMutex
 }
 
 func New(cfg *config.Config) *Aggregator {
@@ -26,7 +33,43 @@ func New(cfg *config.Config) *Aggregator {
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		health: make(map[string]exchangeHealth),
 	}
+}
+
+// ExchangeStatus returns "ok" if last fetch < 5 minutes ago, "degraded" if 5-15 min, "down" if >15 min.
+func (a *Aggregator) ExchangeStatus(exchange string) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	h, ok := a.health[exchange]
+	if !ok {
+		return "unknown"
+	}
+	age := time.Since(h.lastSuccess)
+	if age < 5*time.Minute {
+		return "ok"
+	}
+	if age < 15*time.Minute {
+		return "degraded"
+	}
+	return "down"
+}
+
+func (a *Aggregator) recordSuccess(exchange string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.health[exchange] = exchangeHealth{lastSuccess: time.Now()}
+}
+
+func (a *Aggregator) recordError(exchange string, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	h := a.health[exchange]
+	h.lastError = ""
+	if err != nil {
+		h.lastError = err.Error()
+	}
+	a.health[exchange] = h
 }
 
 // ─── Bybit raw response shapes ────────────────────────────────────────────────
@@ -146,8 +189,10 @@ func (a *Aggregator) fetchBybitFundingRate(ctx context.Context, symbol string) (
 
 	var raw bybitResp[bybitTickerResult]
 	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("bybit", err)
 		return 0, 0, fmt.Errorf("fetchBybitFundingRate: %w", err)
 	}
+	a.recordSuccess("bybit")
 	if len(raw.Result.List) == 0 {
 		return 0, 0, fmt.Errorf("fetchBybitFundingRate: no data for %s", symbol)
 	}
@@ -171,8 +216,10 @@ func (a *Aggregator) fetchBinanceFundingRate(ctx context.Context, symbol string)
 		NextFundingTime int64  `json:"nextFundingTime"`
 	}
 	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("binance", err)
 		return 0, fmt.Errorf("fetchBinanceFundingRate: %w", err)
 	}
+	a.recordSuccess("binance")
 	rate, _ := strconv.ParseFloat(raw.LastFundingRate, 64)
 	return rate, nil
 }
@@ -193,8 +240,10 @@ func (a *Aggregator) fetchOKXFundingRate(ctx context.Context, symbol string) (fl
 		} `json:"data"`
 	}
 	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("okx", err)
 		return 0, fmt.Errorf("fetchOKXFundingRate: %w", err)
 	}
+	a.recordSuccess("okx")
 	if len(raw.Data) == 0 {
 		return 0, fmt.Errorf("fetchOKXFundingRate: no data for %s", symbol)
 	}
@@ -215,8 +264,10 @@ func (a *Aggregator) fetchOpenInterest(ctx context.Context, symbol string) (mode
 	)
 	var oiRaw bybitResp[bybitOIResult]
 	if err := a.publicGet(ctx, oiURL, &oiRaw); err != nil {
+		a.recordError("bybit", err)
 		return models.OpenInterest{}, fmt.Errorf("fetchOpenInterest: %w", err)
 	}
+	a.recordSuccess("bybit")
 	if len(oiRaw.Result.List) == 0 {
 		return models.OpenInterest{}, fmt.Errorf("fetchOpenInterest: no OI data for %s", symbol)
 	}
@@ -228,8 +279,10 @@ func (a *Aggregator) fetchOpenInterest(ctx context.Context, symbol string) (mode
 	)
 	var tickerRaw bybitResp[bybitTickerResult]
 	if err := a.publicGet(ctx, tickerURL, &tickerRaw); err != nil {
+		a.recordError("bybit", err)
 		return models.OpenInterest{}, fmt.Errorf("fetchOpenInterest price: %w", err)
 	}
+	a.recordSuccess("bybit")
 	if len(tickerRaw.Result.List) == 0 {
 		return models.OpenInterest{}, fmt.Errorf("fetchOpenInterest: no ticker data for %s", symbol)
 	}
@@ -280,8 +333,10 @@ func (a *Aggregator) fetchLiquidationMap(ctx context.Context, symbol string) (mo
 
 	var raw bybitResp[bybitOrderbookResult]
 	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("bybit", err)
 		return models.LiquidationMap{}, fmt.Errorf("fetchLiquidationMap: %w", err)
 	}
+	a.recordSuccess("bybit")
 
 	ob := raw.Result
 	if len(ob.Bids) == 0 || len(ob.Asks) == 0 {
@@ -339,8 +394,10 @@ func (a *Aggregator) fetchBinanceData(ctx context.Context, symbol string) ([]mod
 
 	var raw []bnLongShortItem
 	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("binance", err)
 		return nil, fmt.Errorf("fetchBinanceData: %w", err)
 	}
+	a.recordSuccess("binance")
 
 	ratios := make([]models.LongShortRatio, 0, len(raw))
 	for _, item := range raw {
@@ -375,8 +432,10 @@ func (a *Aggregator) FetchOIHistory(ctx context.Context, symbol string, limit in
 	)
 	var oiRaw bybitResp[bybitOIResult]
 	if err := a.publicGet(ctx, oiURL, &oiRaw); err != nil {
+		a.recordError("bybit", err)
 		return nil, fmt.Errorf("FetchOIHistory: %w", err)
 	}
+	a.recordSuccess("bybit")
 	if len(oiRaw.Result.List) == 0 {
 		return nil, fmt.Errorf("FetchOIHistory: no OI data for %s", symbol)
 	}
@@ -387,8 +446,10 @@ func (a *Aggregator) FetchOIHistory(ctx context.Context, symbol string, limit in
 	)
 	var tickerRaw bybitResp[bybitTickerResult]
 	if err := a.publicGet(ctx, tickerURL, &tickerRaw); err != nil {
+		a.recordError("bybit", err)
 		return nil, fmt.Errorf("FetchOIHistory price: %w", err)
 	}
+	a.recordSuccess("bybit")
 	if len(tickerRaw.Result.List) == 0 {
 		return nil, fmt.Errorf("FetchOIHistory: no ticker data for %s", symbol)
 	}
@@ -424,8 +485,10 @@ func (a *Aggregator) FetchFundingHistory(ctx context.Context, symbol string, lim
 
 	var raw bybitResp[bybitFundingHistResult]
 	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("bybit", err)
 		return nil, fmt.Errorf("FetchFundingHistory: %w", err)
 	}
+	a.recordSuccess("bybit")
 
 	list := raw.Result.List
 	// Reverse: Bybit is newest-first, we want oldest at index 0.
@@ -461,8 +524,10 @@ func (a *Aggregator) fetchOKXLongShort(ctx context.Context, symbol string) (mode
 		Data [][]string   `json:"data"`
 	}
 	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("okx", err)
 		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: %w", err)
 	}
+	a.recordSuccess("okx")
 	if len(raw.Data) == 0 {
 		return models.LongShortRatio{}, fmt.Errorf("fetchOKXLongShort: no data for %s", symbol)
 	}
@@ -500,8 +565,10 @@ func (a *Aggregator) fetchBybitLongShort(ctx context.Context, symbol string) (mo
 
 	var raw bybitResp[bybitLSResult]
 	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("bybit", err)
 		return models.LongShortRatio{}, fmt.Errorf("fetchBybitLongShort: %w", err)
 	}
+	a.recordSuccess("bybit")
 	if len(raw.Result.List) == 0 {
 		return models.LongShortRatio{}, fmt.Errorf("fetchBybitLongShort: no data for %s", symbol)
 	}
@@ -535,8 +602,10 @@ func (a *Aggregator) FetchTicker(ctx context.Context, symbol string) (price floa
 
 	var raw bybitResp[bybitTickerResult]
 	if err = a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("bybit", err)
 		return 0, 0, fmt.Errorf("FetchTicker: %w", err)
 	}
+	a.recordSuccess("bybit")
 	if len(raw.Result.List) == 0 {
 		return 0, 0, fmt.Errorf("FetchTicker: no data for %s", symbol)
 	}

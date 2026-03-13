@@ -94,10 +94,31 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 
 // Health handles GET /api/health
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status":    "ok",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-	})
+	exchangeStatus := map[string]string{
+		"bybit":   h.aggregator.ExchangeStatus("bybit"),
+		"binance": h.aggregator.ExchangeStatus("binance"),
+		"okx":     h.aggregator.ExchangeStatus("okx"),
+	}
+	status := "ok"
+	for _, s := range exchangeStatus {
+		if s != "ok" {
+			status = "degraded"
+			break
+		}
+	}
+	health := map[string]interface{}{
+		"status":          status,
+		"uptime":          time.Since(h.startTime).Round(time.Second).String(),
+		"timestamp":       time.Now().UTC(),
+		"worker_running":  h.worker != nil && h.worker.IsRunning(),
+		"ai_enabled":      analysis.IsAIEnabled(),
+		"cache_size":      h.cache.Size(),
+		"exchange_status": exchangeStatus,
+		"supabase":        h.db.Ping(),
+		"last_fetch":      h.cache.LastFetchTime(),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(health) //nolint:errcheck
 }
 
 // GetHistory handles GET /api/history?symbol=BTC

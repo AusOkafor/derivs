@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"time"
+
 	"derivs-backend/internal/aggregator"
 	"derivs-backend/internal/alerts"
 	"derivs-backend/internal/billing"
@@ -9,20 +11,23 @@ import (
 	"derivs-backend/internal/feargreed"
 	"derivs-backend/internal/notify"
 	"derivs-backend/internal/supabase"
+	"derivs-backend/internal/worker"
 )
 
 type Handler struct {
-	aggregator        *aggregator.Aggregator
-	analyzer          *analysis.Analyzer
-	cache             *cache.Cache
-	detector          *alerts.Detector
-	calc              *feargreed.Calculator
-	db                *supabase.Client
-	notifier          *notify.TelegramNotifier
-	billing           *billing.StripeClient
-	adminSecret       string
+	aggregator         *aggregator.Aggregator
+	analyzer           *analysis.Analyzer
+	cache              *cache.Cache
+	detector           *alerts.Detector
+	calc               *feargreed.Calculator
+	db                 *supabase.Client
+	notifier           *notify.TelegramNotifier
+	billing            *billing.StripeClient
+	adminSecret        string
 	stripePriceIDBasic string
 	stripePriceIDPro   string
+	worker             *worker.Worker
+	startTime          time.Time
 }
 
 func New(
@@ -36,6 +41,7 @@ func New(
 	billingClient *billing.StripeClient,
 	adminSecret string,
 	stripePriceIDBasic, stripePriceIDPro string,
+	wrk *worker.Worker,
 ) *Handler {
 	return &Handler{
 		aggregator:         agg,
@@ -49,5 +55,7 @@ func New(
 		adminSecret:        adminSecret,
 		stripePriceIDBasic: stripePriceIDBasic,
 		stripePriceIDPro:   stripePriceIDPro,
+		worker:             wrk,
+		startTime:          time.Now(),
 	}
 }

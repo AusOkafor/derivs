@@ -508,6 +508,27 @@ func (c *Client) LogAlert(ctx context.Context, subscriberID, symbol, alertID str
 	return nil
 }
 
+// Ping performs a lightweight query to Supabase. Returns "ok" or "error: <message>".
+func (c *Client) Ping() string {
+	url := c.baseURL + "/rest/v1/subscribers?limit=1&select=id"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "error: status " + fmt.Sprint(resp.StatusCode)
+	}
+	return "ok"
+}
+
 // setHeaders applies the standard Supabase auth headers to every request.
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("apikey", c.serviceKey)

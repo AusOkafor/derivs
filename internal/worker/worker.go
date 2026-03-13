@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"derivs-backend/internal/aggregator"
@@ -36,6 +37,7 @@ type Worker struct {
 	notifier   *notify.TelegramNotifier
 	db         *supabase.Client
 	calc       *feargreed.Calculator
+	running    atomic.Bool
 }
 
 func New(
@@ -75,12 +77,19 @@ func scheduleDaily(target time.Time, fn func()) {
 	})
 }
 
+// IsRunning returns true if the worker has been started and is still running.
+func (w *Worker) IsRunning() bool {
+	return w.running.Load()
+}
+
 // Start launches background goroutines:
 // - Free tier: 5-min ticker, BTC symbols only
 // - Pro tier: 1-min ticker, all subscribed symbols
 // - Morning brief: 08:00 UTC daily
 // Stops cleanly when ctx is cancelled.
 func (w *Worker) Start(ctx context.Context) {
+	w.running.Store(true)
+	defer w.running.Store(false)
 	log.Println("worker: starting free cycle (5min)")
 	log.Println("worker: starting pro cycle (1min)")
 
