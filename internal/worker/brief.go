@@ -201,7 +201,7 @@ func (w *Worker) SendMorningBrief(ctx context.Context) {
 - Gravity: %.1f%% %s
 
 <b>Top setup across 12 symbols tracked live.</b>
-📊 Full dashboard → derivlens.io
+📊 Full dashboard → derivlens-pro.vercel.app
 🔔 Subscribe for alerts → /start`,
 			now.Format("02 Jan 2006"),
 			btcSignals.CascadeRisk.Level,

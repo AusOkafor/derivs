@@ -124,7 +124,7 @@ func (t *TelegramNotifier) PostTopAlert(alert models.Alert) error {
 		firstLine = alert.Message[:idx]
 	}
 	msg := fmt.Sprintf(
-		"🚨 HIGH ALERT — %s\n%s\n\nFull signal → derivlens.io\nGet alerts → t.me/derivlens_signals",
+		"🚨 HIGH ALERT — %s\n%s\n\nFull signal → derivlens-pro.vercel.app\nGet alerts → t.me/derivlens_signals",
 		alert.Symbol,
 		firstLine,
 	)
