@@ -45,14 +45,15 @@ func NewFeed(symbols []string) *Feed {
 
 // Start connects to Binance liquidation WebSocket
 func (f *Feed) Start(ctx context.Context) {
-	log.Printf("[liquidations] starting feed for %d symbols: %v", len(f.symbols), f.symbols)
+	log.Printf("[liquidations] starting feed for %d symbols", len(f.symbols))
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("[liquidations] context cancelled, stopping feed")
 			return
 		default:
 			if err := f.connect(ctx); err != nil {
-				log.Printf("[liquidations] websocket error: %v — reconnecting in 5s", err)
+				log.Printf("[liquidations] connection error: %v — retrying in 5s", err)
 				time.Sleep(5 * time.Second)
 			}
 		}
@@ -60,6 +61,7 @@ func (f *Feed) Start(ctx context.Context) {
 }
 
 func (f *Feed) connect(ctx context.Context) error {
+	log.Printf("[liquidations] building stream URL for %d symbols", len(f.symbols))
 	// Build combined stream URL for all symbols
 	// Format: btcusdt@forceOrder/ethusdt@forceOrder/...
 	streams := ""
@@ -72,17 +74,15 @@ func (f *Feed) connect(ctx context.Context) error {
 
 	url := fmt.Sprintf("wss://fstream.binance.com/stream?streams=%s", streams)
 
-	log.Printf("[liquidations] attempting WebSocket connection to Binance...")
+	log.Printf("[liquidations] connecting to: %s", url)
 	dialer := websocket.DefaultDialer
-	conn, resp, err := dialer.DialContext(ctx, url, nil)
+	conn, _, err := dialer.DialContext(ctx, url, nil)
 	if err != nil {
-		log.Printf("[liquidations] connection failed: %v (response: %v)", err, resp)
-		return fmt.Errorf("dial: %w", err)
+		return fmt.Errorf("dial failed: %w", err)
 	}
+	log.Printf("[liquidations] WebSocket connected successfully")
 	defer conn.Close()
 	f.conn = conn
-
-	log.Printf("[liquidations] connected successfully — %d symbols", len(f.symbols))
 
 	for {
 		select {

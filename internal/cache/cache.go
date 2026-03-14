@@ -85,11 +85,18 @@ func (c *Cache) purgeExpired() {
 	}
 }
 
-// Size returns the number of cached symbols.
+// Size returns the number of cached symbols (non-expired entries only).
 func (c *Cache) Size() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.store)
+	now := time.Now()
+	n := 0
+	for _, e := range c.store {
+		if now.Before(e.expiresAt) {
+			n++
+		}
+	}
+	return n
 }
 
 // LastFetchTime returns the most recent cache update.
