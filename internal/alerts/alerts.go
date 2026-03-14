@@ -156,6 +156,17 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	}
 	symbol := snap.Symbol
 
+	// ── Rule 0: Liquidation burst (real-time from Binance) ─────────────────────
+	if snap.RecentLiquidations != nil && snap.RecentLiquidations.BurstDetected {
+		if !checkAndSetCooldown(symbol, "liq-burst", 2*time.Minute) {
+			add("liq-burst",
+				fmt.Sprintf("🚨 Liquidation burst detected — $%.1fM liquidated in 30 seconds\nCascade may be underway",
+					snap.RecentLiquidations.BurstSizeUSD/1_000_000),
+				"high",
+			)
+		}
+	}
+
 	// ── Rule 1: Elevated funding rate ────────────────────────────────────────
 	rate := snap.FundingRate.Rate
 	if rate > 0.0005 {

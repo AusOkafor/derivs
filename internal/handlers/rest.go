@@ -92,6 +92,18 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cache.RecordPrice(symbol, snap.LiquidationMap.CurrentPrice)
 
+	if h.liqFeed != nil {
+		recent := h.liqFeed.GetRecent(symbol)
+		burst, burstSize := h.liqFeed.GetBurst(symbol)
+		snap.RecentLiquidations = &models.RecentLiquidations{
+			TotalLongUSD:  recent.TotalLong,
+			TotalShortUSD: recent.TotalShort,
+			BurstDetected: burst,
+			BurstSizeUSD:  burstSize,
+			Window:        "5m",
+		}
+	}
+
 	engine := signals.New()
 	momentum := h.cache.GetPriceMomentum(symbol)
 	sigs := engine.Analyze(snap, momentum)

@@ -17,6 +17,7 @@ import (
 	"derivs-backend/internal/config"
 	"derivs-backend/internal/feargreed"
 	"derivs-backend/internal/handlers"
+	"derivs-backend/internal/liquidations"
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/notify"
 	"derivs-backend/internal/supabase"
@@ -57,12 +58,15 @@ func main() {
 	defer cancel()
 	go wrk.Start(ctx)
 
+	liqFeed := liquidations.NewFeed(config.DefaultSymbols)
+	go liqFeed.Start(ctx)
+
 	var billingClient *billing.StripeClient
 	if cfg.StripeSecretKey != "" && cfg.StripeWebhookSecret != "" && (cfg.StripePriceIDBasic != "" || cfg.StripePriceIDPro != "") {
 		billingClient = billing.New(cfg.StripeSecretKey, cfg.StripeWebhookSecret)
 	}
 
-	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, cfg.AdminSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro, wrk)
+	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, cfg.AdminSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro, wrk, liqFeed)
 	hub := handlers.NewHub(h)
 
 	mux := http.NewServeMux()

@@ -48,14 +48,24 @@ type LongShortRatio struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// RecentLiquidations holds real-time liquidation data from Binance WebSocket.
+type RecentLiquidations struct {
+	TotalLongUSD  float64 `json:"total_long_usd"`
+	TotalShortUSD float64 `json:"total_short_usd"`
+	BurstDetected bool    `json:"burst_detected"`
+	BurstSizeUSD  float64 `json:"burst_size_usd"`
+	Window        string  `json:"window"`
+}
+
 type MarketSnapshot struct {
-	Symbol           string                `json:"symbol"`
-	FundingRate      FundingRate           `json:"funding_rate"`
-	ExchangeFunding  []ExchangeFundingRate `json:"exchange_funding"`
-	OpenInterest     OpenInterest          `json:"open_interest"`
-	LiquidationMap   LiquidationMap        `json:"liquidation_map"`
-	LongShortRatios  []LongShortRatio      `json:"long_short_ratios"`
-	Timestamp        time.Time             `json:"timestamp"`
+	Symbol              string               `json:"symbol"`
+	FundingRate         FundingRate          `json:"funding_rate"`
+	ExchangeFunding     []ExchangeFundingRate `json:"exchange_funding"`
+	OpenInterest        OpenInterest         `json:"open_interest"`
+	LiquidationMap      LiquidationMap       `json:"liquidation_map"`
+	LongShortRatios     []LongShortRatio     `json:"long_short_ratios"`
+	RecentLiquidations  *RecentLiquidations  `json:"recent_liquidations,omitempty"`
+	Timestamp           time.Time            `json:"timestamp"`
 }
 
 type AIAnalysis struct {
