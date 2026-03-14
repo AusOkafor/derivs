@@ -358,13 +358,14 @@ func (c *Client) GetSubscriberTier(ctx context.Context, telegramUsername string)
 	return tier, status, nil
 }
 
-// WasAlertSent returns true if alertID was already logged for subscriberID within the last hour.
-// GET {baseURL}/rest/v1/alert_log?subscriber_id=eq.{id}&alert_id=eq.{alertID}&sent_at=gte.{1hrAgo}
+// WasAlertSent returns true if alertID was already logged for subscriberID within the last 30 minutes.
+// Only checks recent window to avoid permanent dedup (silent alert death).
+// GET {baseURL}/rest/v1/alert_log?subscriber_id=eq.{id}&alert_id=eq.{alertID}&sent_at=gte.{30minAgo}
 func (c *Client) WasAlertSent(ctx context.Context, subscriberID, alertID string) (bool, error) {
-	oneHourAgo := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+	thirtyMinAgo := time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339)
 	url := fmt.Sprintf(
 		"%s/rest/v1/alert_log?subscriber_id=eq.%s&alert_id=eq.%s&sent_at=gte.%s&select=id",
-		c.baseURL, subscriberID, alertID, oneHourAgo,
+		c.baseURL, subscriberID, alertID, thirtyMinAgo,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

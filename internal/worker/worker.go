@@ -29,6 +29,7 @@ const (
 )
 
 var severityRank = map[string]int{"high": 0, "medium": 1, "low": 2}
+var numericSuffix = regexp.MustCompile(`^\d+$`)
 
 // Worker runs a background ticker that fetches market data, detects anomalies,
 // and dispatches Telegram notifications to active subscribers.
@@ -39,6 +40,8 @@ type Worker struct {
 	db         *supabase.Client
 	calc       *feargreed.Calculator
 	running    atomic.Bool
+	freeRunning atomic.Bool
+	proRunning  atomic.Bool
 }
 
 func New(
@@ -152,6 +155,11 @@ func allowedSymbols(sub supabase.Subscriber) []string {
 // runCycleFree runs for free and basic tier subscribers, 5-min interval.
 // Free: BTC only. Basic: up to 5 symbols.
 func (w *Worker) runCycleFree(ctx context.Context) {
+	if !w.freeRunning.CompareAndSwap(false, true) {
+		log.Println("[worker] free cycle already running, skipping")
+		return
+	}
+	defer w.freeRunning.Store(false)
 	w.runCycle(ctx, false) // freeCycle = not pro
 }
 
@@ -385,7 +393,7 @@ func ruleTypeFromAlertID(alertID string) string {
 	// Strip trailing -NUMBER (e.g. liq-cluster-69800 -> liq-cluster, whale-long-150 -> whale-long)
 	if idx := strings.LastIndex(rest, "-"); idx >= 0 {
 		suffix := rest[idx+1:]
-		if regexp.MustCompile(`^\d+$`).MatchString(suffix) {
+		if numericSuffix.MatchString(suffix) {
 			rest = rest[:idx]
 		}
 	}
