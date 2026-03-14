@@ -92,7 +92,7 @@ func (w *Worker) IsRunning() bool {
 // Start launches background goroutines:
 // - Free tier: 5-min ticker, BTC symbols only
 // - Pro tier: 1-min ticker, all subscribed symbols
-// - Morning brief: 08:00 UTC daily
+// - Morning brief: 13:00 UTC daily (8am Jamaica time)
 // Stops cleanly when ctx is cancelled.
 func (w *Worker) Start(ctx context.Context) {
 	w.running.Store(true)
@@ -100,7 +100,7 @@ func (w *Worker) Start(ctx context.Context) {
 	log.Println("worker: starting free cycle (5min)")
 	log.Println("worker: starting pro cycle (1min)")
 
-	scheduleDaily(time.Date(0, 1, 1, 8, 0, 0, 0, time.UTC), func() {
+	scheduleDaily(time.Date(0, 1, 1, 13, 0, 0, 0, time.UTC), func() {
 		go w.SendMorningBrief(context.Background())
 	})
 

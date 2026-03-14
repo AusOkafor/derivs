@@ -272,7 +272,7 @@ func (w *Worker) buildBrief(
 	msg += "\n<b>🔥 Most Crowded Longs</b>\n" + longsStr + "\n"
 	msg += "\n<b>❄️ Most Crowded Shorts</b>\n" + shortsStr + "\n"
 	msg += "\n<b>⚡ Highest Funding</b>\n" + fundingStr + "\n"
-	msg += fmt.Sprintf("\n<i>DerivLens Pro • %s 08:00 UTC</i>", dateStr)
+	msg += fmt.Sprintf("\n<i>DerivLens Pro • %s 13:00 UTC</i>", dateStr)
 	if addUpgradeCTA {
 		msg += upgradeCTA
 	}
