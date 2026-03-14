@@ -233,7 +233,7 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 			log.Printf("worker: FetchSnapshot(%s): %v", sym, err)
 			continue
 		}
-		sigs := engine.Analyze(snap)
+		sigs := engine.Analyze(snap, 0)
 		alerts := w.detector.Analyze(snap, sigs)
 		snapshots[sym] = symbolAlerts{detected: alerts}
 		if proOnly {

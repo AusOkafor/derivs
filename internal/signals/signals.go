@@ -13,14 +13,14 @@ type Engine struct{}
 
 func New() *Engine { return &Engine{} }
 
-func (e *Engine) Analyze(snap models.MarketSnapshot) models.MarketSignals {
+func (e *Engine) Analyze(snap models.MarketSnapshot, momentum float64) models.MarketSignals {
 	sig := models.MarketSignals{Symbol: snap.Symbol}
 
 	// 1. OI Trend (price + OI correlation)
 	sig.OITrend = detectOITrend(snap)
 
-	// 2. Liquidation Magnet
-	sig.LiquidationMagnet = detectLiquidationMagnet(snap)
+	// 2. Liquidation Magnet (with momentum filter)
+	sig.LiquidationMagnet = detectLiquidationMagnet(snap, momentum)
 
 	// 3. Liquidity Gravity
 	sig.LiquidityGravity = calcLiquidityGravity(snap)
@@ -37,8 +37,8 @@ func (e *Engine) Analyze(snap models.MarketSnapshot) models.MarketSignals {
 	// 7. Market Regime
 	sig.Regime, sig.RegimeConfidence = detectRegime(snap, sig)
 
-	// 8. Stop Hunt Probability
-	sig.StopHunt = calcStopHunt(snap, sig.LiquidityGravity, sig.LiquidationMagnet)
+	// 8. Stop Hunt Probability (with momentum adjustment)
+	sig.StopHunt = calcStopHunt(snap, sig.LiquidityGravity, sig.LiquidationMagnet, momentum)
 
 	// 9. Exchange Divergence
 	sig.ExchangeDivergence = calcExchangeDivergence(snap.LongShortRatios)
@@ -74,7 +74,7 @@ func detectOITrend(snap models.MarketSnapshot) models.OITrend {
 	}
 }
 
-func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagnet {
+func detectLiquidationMagnet(snap models.MarketSnapshot, momentum float64) *models.LiquidationMagnet {
 	currentPrice := snap.LiquidationMap.CurrentPrice
 	if currentPrice == 0 {
 		return nil
@@ -129,13 +129,48 @@ func detectLiquidationMagnet(snap models.MarketSnapshot) *models.LiquidationMagn
 		prob = 95
 	}
 
-	return &models.LiquidationMagnet{
+	magnet := &models.LiquidationMagnet{
 		Side:        best.lvl.Side,
 		Price:       best.lvl.Price,
 		SizeUSD:     best.lvl.SizeUsd,
 		Distance:    best.distance,
 		Probability: prob,
 	}
+	magnet.Probability = applyMomentumFilter(magnet.Probability, magnet.Side, momentum)
+	return magnet
+}
+
+func applyMomentumFilter(baseProb int, side string, momentum float64) int {
+	// momentum > 0 = price moving up
+	// momentum < 0 = price moving down
+	adjusted := float64(baseProb)
+
+	// Short cluster above price — upward momentum increases probability
+	if side == "short" {
+		if momentum > 0.05 {
+			adjusted *= 1.15 // price moving toward short cluster
+		} else if momentum < -0.05 {
+			adjusted *= 0.75 // price moving away from short cluster
+		}
+	}
+
+	// Long cluster below price — downward momentum increases probability
+	if side == "long" {
+		if momentum < -0.05 {
+			adjusted *= 1.15 // price moving toward long cluster
+		} else if momentum > 0.05 {
+			adjusted *= 0.75 // price moving away from long cluster
+		}
+	}
+
+	// Clamp to 0-98 (never 100% certain)
+	if adjusted > 98 {
+		adjusted = 98
+	}
+	if adjusted < 0 {
+		adjusted = 0
+	}
+	return int(adjusted)
 }
 
 func calcLiquidityGravity(snap models.MarketSnapshot) models.LiquidityGravity {
@@ -465,7 +500,7 @@ func avgLongPct(ratios []models.LongShortRatio) float64 {
 	return sum / float64(len(ratios))
 }
 
-func calcStopHunt(snap models.MarketSnapshot, gravity models.LiquidityGravity, magnet *models.LiquidationMagnet) models.StopHuntSignal {
+func calcStopHunt(snap models.MarketSnapshot, gravity models.LiquidityGravity, magnet *models.LiquidationMagnet, momentum float64) models.StopHuntSignal {
 	shortHuntProb := int(gravity.UpwardPull)
 	longHuntProb := int(gravity.DownwardPull)
 
@@ -501,6 +536,15 @@ func calcStopHunt(snap models.MarketSnapshot, gravity models.LiquidityGravity, m
 		shortHuntProb = 5
 	}
 	longHuntProb = 100 - shortHuntProb
+
+	// Momentum filter: price moving toward a side increases that side's hunt probability
+	if momentum > 0.05 {
+		shortHuntProb = min(98, int(float64(shortHuntProb)*1.1))
+		longHuntProb = max(2, 100-shortHuntProb)
+	} else if momentum < -0.05 {
+		longHuntProb = min(98, int(float64(longHuntProb)*1.1))
+		shortHuntProb = max(2, 100-longHuntProb)
+	}
 
 	targetSide := "longs"
 	targetPrice := gravity.DownwardTarget

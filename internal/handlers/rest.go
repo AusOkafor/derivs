@@ -90,9 +90,11 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	if snap.Symbol != symbol {
 		log.Printf("GetSnapshot: snapshot symbol mismatch: requested %s, got %s", symbol, snap.Symbol)
 	}
+	h.cache.RecordPrice(symbol, snap.LiquidationMap.CurrentPrice)
 
 	engine := signals.New()
-	sigs := engine.Analyze(snap)
+	momentum := h.cache.GetPriceMomentum(symbol)
+	sigs := engine.Analyze(snap, momentum)
 
 	ai, err := h.analyzer.Analyze(ctx, snap, sigs, tier, userAPIKey, preferredModel)
 	if err != nil {
@@ -242,9 +244,11 @@ func (h *Handler) GetAlerts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	h.cache.RecordPrice(symbol, snap.LiquidationMap.CurrentPrice)
 
 	engine := signals.New()
-	sigs := engine.Analyze(snap)
+	momentum := h.cache.GetPriceMomentum(symbol)
+	sigs := engine.Analyze(snap, momentum)
 	writeJSON(w, http.StatusOK, h.detector.Analyze(snap, sigs))
 }
 
@@ -279,11 +283,13 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 				log.Printf("tickers FetchSnapshot %s: %v", symbol, err)
 				return
 			}
+			h.cache.RecordPrice(symbol, snap.LiquidationMap.CurrentPrice)
 			price, change24h, tickErr := h.aggregator.FetchTicker(ctx, symbol)
 			if tickErr != nil {
 				price = snap.LiquidationMap.CurrentPrice
 			}
-			sigs := engine.Analyze(snap)
+			momentum := h.cache.GetPriceMomentum(symbol)
+			sigs := engine.Analyze(snap, momentum)
 			fg := h.calc.Calculate(snap)
 			mu.Lock()
 			results[idx] = models.TickerResult{

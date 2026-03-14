@@ -189,7 +189,7 @@ func (w *Worker) SendMorningBrief(ctx context.Context) {
 	// Public channel morning signal — post after Pro briefs
 	if bs, ok := snapshots["BTC"]; ok {
 		engine := signals.New()
-		btcSignals := engine.Analyze(bs.snap)
+		btcSignals := engine.Analyze(bs.snap, 0)
 		publicMessage := fmt.Sprintf(
 			`🔍 <b>DerivLens Morning Signal</b> — %s UTC
 

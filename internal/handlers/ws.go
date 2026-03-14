@@ -46,9 +46,11 @@ func (hub *Hub) getOrFetch(ctx context.Context, symbol string) (models.SnapshotW
 	if snap.Symbol != symbol {
 		log.Printf("ws: snapshot symbol mismatch: requested %s, got %s", symbol, snap.Symbol)
 	}
+	hub.handler.cache.RecordPrice(symbol, snap.LiquidationMap.CurrentPrice)
 
 	engine := signals.New()
-	sigs := engine.Analyze(snap)
+	momentum := hub.handler.cache.GetPriceMomentum(symbol)
+	sigs := engine.Analyze(snap, momentum)
 
 	ai, _ := hub.handler.analyzer.Analyze(ctx, snap, sigs, "free", "", "") // WebSocket has no user context; use free tier
 

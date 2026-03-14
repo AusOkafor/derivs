@@ -14,11 +14,19 @@ type entry struct {
 	expiresAt time.Time
 }
 
+// PricePoint holds a single price observation for momentum calculation.
+type PricePoint struct {
+	Price     float64
+	Timestamp time.Time
+}
+
 type Cache struct {
-	mu           sync.RWMutex
-	store        map[string]entry
-	ttl          time.Duration
+	mu            sync.RWMutex
+	store         map[string]entry
+	ttl           time.Duration
 	lastFetchTime time.Time
+	priceHistory  map[string][]PricePoint
+	priceHistMu   sync.RWMutex
 }
 
 func New(ttlSeconds int) *Cache {
@@ -89,4 +97,36 @@ func (c *Cache) LastFetchTime() time.Time {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.lastFetchTime
+}
+
+// RecordPrice stores the latest price for a symbol (keeps last 2 points for momentum).
+func (c *Cache) RecordPrice(symbol string, price float64) {
+	c.priceHistMu.Lock()
+	defer c.priceHistMu.Unlock()
+	if c.priceHistory == nil {
+		c.priceHistory = make(map[string][]PricePoint)
+	}
+	history := c.priceHistory[symbol]
+	history = append(history, PricePoint{Price: price, Timestamp: time.Now()})
+	if len(history) > 2 {
+		history = history[len(history)-2:]
+	}
+	c.priceHistory[symbol] = history
+}
+
+// GetPriceMomentum returns the percentage change between the last two price points.
+// Returns 0 if fewer than 2 points are available.
+func (c *Cache) GetPriceMomentum(symbol string) float64 {
+	c.priceHistMu.RLock()
+	defer c.priceHistMu.RUnlock()
+	history := c.priceHistory[symbol]
+	if len(history) < 2 {
+		return 0
+	}
+	prev := history[0].Price
+	curr := history[1].Price
+	if prev == 0 {
+		return 0
+	}
+	return (curr - prev) / prev * 100
 }
