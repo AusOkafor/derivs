@@ -45,8 +45,8 @@ func main() {
 	calc := feargreed.New()
 
 	tg := notify.NewTelegram(cfg.TelegramBotToken)
-	alerts.SetOnHighAlert(func(a models.Alert) {
-		if err := tg.PostTopAlert(a); err != nil {
+	alerts.SetOnHighAlert(func(a models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) {
+		if err := tg.PostTopAlert(a, snap, sigs); err != nil {
 			log.Printf("alerts: PostTopAlert: %v", err)
 		}
 	})

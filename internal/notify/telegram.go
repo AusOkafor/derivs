@@ -8,11 +8,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"mime/multipart"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
+	"derivs-backend/internal/cards"
 	"derivs-backend/internal/models"
 )
 
@@ -89,6 +92,47 @@ func severityEmoji(severity string) string {
 	}
 }
 
+// SendPhoto sends a photo to a Telegram chat with an optional caption.
+func (t *TelegramNotifier) SendPhoto(chatID string, imgBytes []byte, caption string) error {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendPhoto", t.botToken)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	part, err := writer.CreateFormFile("photo", "alert.png")
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(imgBytes); err != nil {
+		return err
+	}
+
+	_ = writer.WriteField("chat_id", chatID)
+	if caption != "" {
+		_ = writer.WriteField("caption", caption)
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram: sendPhoto unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // PostToChannel posts a message to the public channel @derivlens_signals.
 func (t *TelegramNotifier) PostToChannel(message string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.botToken)
@@ -118,7 +162,38 @@ func (t *TelegramNotifier) PostToChannel(message string) error {
 }
 
 // PostTopAlert posts a HIGH severity alert to the public channel as a free preview.
-func (t *TelegramNotifier) PostTopAlert(alert models.Alert) error {
+// When severity is HIGH and signals include a liquidation magnet, generates and sends a visual card.
+func (t *TelegramNotifier) PostTopAlert(alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) error {
+	if (alert.Severity == "high" || alert.Severity == "HIGH") && sigs.LiquidationMagnet != nil {
+		magnet := sigs.LiquidationMagnet
+		data := cards.AlertCardData{
+			Symbol:       alert.Symbol,
+			Severity:     "HIGH",
+			AlertType:    "Liquidity Sweep",
+			Price:        snap.LiquidationMap.CurrentPrice,
+			ClusterPrice: magnet.Price,
+			ClusterSize:  magnet.SizeUSD,
+			Distance:     magnet.Distance / 100, // magnet.Distance is % (1.5); card expects decimal (0.015)
+			SweepProb:    magnet.Probability,
+			CascadeLevel: sigs.CascadeRisk.Level,
+			CascadeScore: sigs.CascadeRisk.Score,
+			GravityDir:   sigs.LiquidityGravity.Dominant,
+			GravityPct:   math.Max(sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.DownwardPull),
+			Funding:      snap.FundingRate.Rate,
+			OIChange:     snap.OpenInterest.OIChange1h,
+		}
+		imgBytes, err := cards.GenerateAlertCard(data)
+		if err == nil {
+			firstLine := alert.Message
+			if idx := strings.Index(alert.Message, "\n"); idx > 0 {
+				firstLine = alert.Message[:idx]
+			}
+			caption := fmt.Sprintf("🔴 HIGH ALERT — %s\n%s\n\nFull dashboard → derivlens.io", alert.Symbol, firstLine)
+			return t.SendPhoto("@derivlens_signals", imgBytes, caption)
+		}
+	}
+
+	// Fallback to text
 	firstLine := alert.Message
 	if idx := strings.Index(alert.Message, "\n"); idx > 0 {
 		firstLine = alert.Message[:idx]

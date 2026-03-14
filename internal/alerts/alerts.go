@@ -17,10 +17,10 @@ var (
 )
 
 // OnHighAlert is called when a HIGH severity alert fires. Set via SetOnHighAlert.
-var OnHighAlert func(alert models.Alert)
+var OnHighAlert func(alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals)
 
 // SetOnHighAlert sets the callback invoked when a HIGH severity alert fires.
-func SetOnHighAlert(fn func(alert models.Alert)) {
+func SetOnHighAlert(fn func(alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals)) {
 	OnHighAlert = fn
 }
 
@@ -151,7 +151,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 		out = append(out, a)
 		if severity == "high" && OnHighAlert != nil {
-			OnHighAlert(a)
+			OnHighAlert(a, snap, sigs)
 		}
 	}
 	symbol := snap.Symbol
@@ -322,7 +322,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 		out = append(out, a)
 		if severity == "high" && OnHighAlert != nil {
-			OnHighAlert(a)
+			OnHighAlert(a, snap, sigs)
 		}
 		}
 	}
@@ -351,7 +351,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 		out = append(out, a)
 		if OnHighAlert != nil {
-			OnHighAlert(a)
+			OnHighAlert(a, snap, sigs)
 		}
 	}
 
@@ -367,7 +367,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 		out = append(out, a)
 		if OnHighAlert != nil {
-			OnHighAlert(a)
+			OnHighAlert(a, snap, sigs)
 		}
 	}
 
@@ -400,7 +400,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			}
 			out = append(out, a)
 			if OnHighAlert != nil {
-				OnHighAlert(a)
+				OnHighAlert(a, snap, sigs)
 			}
 		}
 	}
@@ -416,7 +416,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 		out = append(out, a)
 		if OnHighAlert != nil {
-			OnHighAlert(a)
+			OnHighAlert(a, snap, sigs)
 		}
 	}
 
