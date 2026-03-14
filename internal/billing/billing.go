@@ -43,8 +43,8 @@ func (s *StripeClient) CreateCheckoutSession(telegramUsername, priceID, plan str
 				Quantity: stripe.Int64(1),
 			},
 		},
-		SuccessURL: stripe.String("https://derivlens-pro.vercel.app/dashboard?upgraded=true"),
-		CancelURL:  stripe.String("https://derivlens-pro.vercel.app/dashboard"),
+		SuccessURL: stripe.String("https://derivlens.io/dashboard?upgraded=true"),
+		CancelURL:  stripe.String("https://derivlens.io/dashboard"),
 		Metadata: map[string]string{
 			"telegram_username": telegramUsername,
 			"plan":              plan,

@@ -682,7 +682,7 @@ func (h *Handler) CreatePortal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := h.billing.CreatePortalSession(customerID, "https://derivlens-pro.vercel.app/dashboard")
+	url, err := h.billing.CreatePortalSession(customerID, "https://derivlens.io/dashboard")
 	if err != nil {
 		log.Printf("billing: CreatePortalSession: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

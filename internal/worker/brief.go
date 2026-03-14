@@ -15,7 +15,7 @@ import (
 )
 
 const briefSymbols = "BTC, ETH, SOL, ARB, DOGE, AVAX"
-const upgradeCTA = "\n\n<i>Upgrade to Pro for all 12 symbols → derivlens-pro.vercel.app</i>"
+const upgradeCTA = "\n\n<i>Upgrade to Pro for all 12 symbols → derivlens.io</i>"
 
 type symLongPct struct {
 	sym     string
@@ -201,7 +201,7 @@ func (w *Worker) SendMorningBrief(ctx context.Context) {
 - Gravity: %.1f%% %s
 
 <b>Top setup across 12 symbols tracked live.</b>
-📊 Full dashboard → derivlens-pro.vercel.app
+📊 Full dashboard → derivlens.io
 🔔 Subscribe for alerts → /start`,
 			now.Format("02 Jan 2006"),
 			btcSignals.CascadeRisk.Level,
