@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 	"derivs-backend/internal/aggregator"
 	"derivs-backend/internal/alerts"
+	"derivs-backend/internal/config"
 	"derivs-backend/internal/feargreed"
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/notify"
@@ -103,6 +106,8 @@ func (w *Worker) Start(ctx context.Context) {
 
 	freeTicker := time.NewTicker(5 * time.Minute)
 	proTicker := time.NewTicker(1 * time.Minute)
+	topTargetTicker := time.NewTicker(30 * time.Minute)
+	defer topTargetTicker.Stop()
 
 	// Run both immediately on start
 	go w.runCycleFree(ctx)
@@ -116,6 +121,8 @@ func (w *Worker) Start(ctx context.Context) {
 		case <-proTicker.C:
 			log.Println("worker: pro cycle tick")
 			go w.runCyclePro(ctx)
+		case <-topTargetTicker.C:
+			go w.broadcastTopTarget(ctx)
 		case <-ctx.Done():
 			log.Println("worker: shutting down")
 			freeTicker.Stop()
@@ -354,6 +361,139 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		}
 	}
 	return len(subscribers)
+}
+
+func (w *Worker) broadcastTopTarget(ctx context.Context) {
+	type TargetCandidate struct {
+		Symbol  string
+		Score   float64
+		Snap    models.MarketSnapshot
+		Signals models.MarketSignals
+		Alert   *models.Alert
+	}
+
+	var candidates []TargetCandidate
+	var mu sync.Mutex
+
+	engine := signals.New()
+	for _, symbol := range config.DefaultSymbols {
+		snap, err := w.aggregator.FetchSnapshot(ctx, symbol)
+		if err != nil {
+			continue
+		}
+
+		sigs := engine.Analyze(snap, 0)
+		alerts := w.detector.Analyze(snap, sigs)
+
+		magnet := sigs.LiquidationMagnet
+		if magnet == nil {
+			continue
+		}
+
+		distance := magnet.Distance
+		if distance < 0.0001 {
+			distance = 0.0001
+		}
+
+		gravityDom := sigs.LiquidityGravity.UpwardPull
+		if sigs.LiquidityGravity.DownwardPull > gravityDom {
+			gravityDom = sigs.LiquidityGravity.DownwardPull
+		}
+
+		score := (magnet.SizeUSD / distance) *
+			(float64(magnet.Probability) / 100) *
+			(gravityDom / 100)
+
+		if magnet.Probability < 70 {
+			continue
+		}
+
+		var bestAlert *models.Alert
+		for i := range alerts {
+			if alerts[i].Severity == "high" {
+				bestAlert = &alerts[i]
+				break
+			}
+		}
+
+		mu.Lock()
+		candidates = append(candidates, TargetCandidate{
+			Symbol:  symbol,
+			Score:   score,
+			Snap:    snap,
+			Signals: sigs,
+			Alert:   bestAlert,
+		})
+		mu.Unlock()
+	}
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Score > candidates[j].Score
+	})
+
+	top := candidates[0]
+	magnet := top.Signals.LiquidationMagnet
+
+	direction := "upward sweep"
+	clusterType := "Short liquidations"
+	if magnet.Side == "long" {
+		direction = "downward sweep"
+		clusterType = "Long liquidations"
+	}
+
+	message := fmt.Sprintf(
+		`🔥 <b>TOP LIQUIDITY TARGET</b>
+
+<b>%s</b> — %s
+
+Price: %s
+Target: %s
+Distance: %.2f%%
+
+%s building
+Sweep Probability: <b>%d%%</b>
+Cascade Risk: %s (%d/100)
+Gravity: %.1f%% %s
+
+Expected move: <b>%s</b>
+
+📊 Full dashboard → derivlens.io
+🔔 Get alerts → t.me/derivlens_signals`,
+		top.Symbol,
+		clusterType,
+		formatPriceStr(top.Snap.LiquidationMap.CurrentPrice),
+		formatPriceStr(magnet.Price),
+		magnet.Distance,
+		clusterType,
+		magnet.Probability,
+		top.Signals.CascadeRisk.Level,
+		top.Signals.CascadeRisk.Score,
+		math.Max(top.Signals.LiquidityGravity.UpwardPull, top.Signals.LiquidityGravity.DownwardPull),
+		top.Signals.LiquidityGravity.Dominant,
+		direction,
+	)
+
+	if magnet.Probability >= 80 && top.Alert != nil {
+		w.notifier.PostTopAlert(*top.Alert, top.Snap, top.Signals)
+	} else {
+		w.notifier.PostToChannel(message)
+	}
+
+	log.Printf("[worker] top target broadcast: %s score=%.0f prob=%d%%",
+		top.Symbol, top.Score, magnet.Probability)
+}
+
+func formatPriceStr(p float64) string {
+	if p >= 1000 {
+		return fmt.Sprintf("$%.2f", p)
+	} else if p >= 1 {
+		return fmt.Sprintf("$%.3f", p)
+	}
+	return fmt.Sprintf("$%.4f", p)
 }
 
 // shouldSendAlert checks whether a subscriber's rules JSONB permits a given alert.
