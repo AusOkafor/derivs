@@ -131,8 +131,9 @@ func isProTier(tier string) bool {
 }
 
 // allowedSymbols returns the symbols a subscriber is allowed to receive alerts for.
-// Free: BTC only. Basic: up to 5 symbols. Pro: all symbols.
+// Free: BTC, ETH, SOL. Basic: up to 5 symbols. Pro: all symbols.
 func allowedSymbols(sub supabase.Subscriber) []string {
+	freeSymbols := []string{"BTC", "ETH", "SOL"}
 	switch sub.Tier {
 	case "pro":
 		return sub.Symbols
@@ -144,8 +145,11 @@ func allowedSymbols(sub supabase.Subscriber) []string {
 	default: // free or empty
 		allowed := []string{}
 		for _, s := range sub.Symbols {
-			if strings.EqualFold(s, "BTC") {
-				allowed = append(allowed, s)
+			for _, f := range freeSymbols {
+				if strings.EqualFold(s, f) {
+					allowed = append(allowed, s)
+					break
+				}
 			}
 		}
 		return allowed
@@ -153,7 +157,7 @@ func allowedSymbols(sub supabase.Subscriber) []string {
 }
 
 // runCycleFree runs for free and basic tier subscribers, 5-min interval.
-// Free: BTC only. Basic: up to 5 symbols.
+// Free: BTC, ETH, SOL. Basic: up to 5 symbols.
 func (w *Worker) runCycleFree(ctx context.Context) {
 	if !w.freeRunning.CompareAndSwap(false, true) {
 		log.Println("[worker] free cycle already running, skipping")
