@@ -181,6 +181,22 @@ type LiquidityPressureIndex struct {
 	Description string `json:"description"`
 }
 
+// FundingVelocitySignal indicates how fast funding rate is changing.
+type FundingVelocitySignal struct {
+	RatePerHour float64 `json:"rate_per_hour"` // how fast funding is changing
+	Direction   string  `json:"direction"`     // "accelerating_positive", "accelerating_negative", "stable"
+	Alert       bool    `json:"alert"`         // true when velocity is extreme
+	Description string  `json:"description"`
+}
+
+// OIDeltaSignal indicates OI change velocity.
+type OIDeltaSignal struct {
+	ChangePercent float64 `json:"change_percent"` // OI change in last 1h
+	Velocity      string  `json:"velocity"`      // "surging", "rising", "stable", "falling", "collapsing"
+	Alert         bool    `json:"alert"`
+	Description   string  `json:"description"`
+}
+
 // ExchangeDivergence captures cross-exchange long/short positioning divergence
 type ExchangeDivergence struct {
 	Detected   bool    `json:"detected"`
@@ -218,6 +234,8 @@ type MarketSignals struct {
 	ExchangeDivergence     ExchangeDivergence   `json:"exchange_divergence"`
 	CascadeRisk            CascadeRiskScore     `json:"cascade_risk"`
 	LiquidityPressure      LiquidityPressureIndex `json:"liquidity_pressure"`
+	FundingVelocity        FundingVelocitySignal `json:"funding_velocity"`
+	OIDelta                OIDeltaSignal         `json:"oi_delta"`
 }
 
 type SnapshotWithAnalysis struct {

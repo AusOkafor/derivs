@@ -151,6 +151,9 @@ Detected: %v (spread: %.1f%%)
 %s long-heavy: %.1f%% | %s short-heavy: %.1f%%
 Signal: %s
 
+FUNDING VELOCITY: %s (%.4f%%/hr) %s
+OI DELTA: %s (%.1f%% in 1h) %s
+
 LIQUIDATION CASCADE RISK: %s (%d/100)
 %s
 Factors: %s
@@ -206,6 +209,12 @@ Respond ONLY with a valid JSON object, no markdown, no explanation:
 		sigs.ExchangeDivergence.BearishEx,
 		sigs.ExchangeDivergence.BearishPct,
 		sigs.ExchangeDivergence.Signal,
+		sigs.FundingVelocity.Direction,
+		sigs.FundingVelocity.RatePerHour,
+		sigs.FundingVelocity.Description,
+		sigs.OIDelta.Velocity,
+		sigs.OIDelta.ChangePercent,
+		sigs.OIDelta.Description,
 		sigs.CascadeRisk.Level,
 		sigs.CascadeRisk.Score,
 		sigs.CascadeRisk.Description,

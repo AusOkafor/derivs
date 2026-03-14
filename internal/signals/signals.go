@@ -43,6 +43,12 @@ func (e *Engine) Analyze(snap models.MarketSnapshot) models.MarketSignals {
 	// 9. Exchange Divergence
 	sig.ExchangeDivergence = calcExchangeDivergence(snap.LongShortRatios)
 
+	// 9.5. Funding Velocity
+	sig.FundingVelocity = calcFundingVelocity(snap)
+
+	// 9.6. OI Delta
+	sig.OIDelta = calcOIDelta(snap)
+
 	// 10. Cascade Risk (must be last — depends on all other signals)
 	sig.CascadeRisk = calcCascadeRisk(snap, sig)
 
@@ -534,6 +540,74 @@ func fundingDescription(rate float64) string {
 		return "negative"
 	default:
 		return "neutral"
+	}
+}
+
+func calcFundingVelocity(snap models.MarketSnapshot) models.FundingVelocitySignal {
+	rate := snap.FundingRate.Rate
+
+	var direction, description string
+	alert := false
+
+	switch {
+	case rate > 0.0005:
+		direction = "accelerating_positive"
+		description = fmt.Sprintf("Funding accelerating positive at %.4f%% — longs being crowded fast", rate*100)
+		alert = true
+	case rate < -0.0005:
+		direction = "accelerating_negative"
+		description = fmt.Sprintf("Funding accelerating negative at %.4f%% — shorts being crowded fast", rate*100)
+		alert = true
+	case rate > 0.0003:
+		direction = "rising_positive"
+		description = fmt.Sprintf("Funding rising positive at %.4f%% — longs building", rate*100)
+	case rate < -0.0003:
+		direction = "rising_negative"
+		description = fmt.Sprintf("Funding rising negative at %.4f%% — shorts building", rate*100)
+	default:
+		direction = "stable"
+		description = "Funding stable — no crowding detected"
+	}
+
+	return models.FundingVelocitySignal{
+		RatePerHour: rate * 100,
+		Direction:   direction,
+		Alert:       alert,
+		Description: description,
+	}
+}
+
+func calcOIDelta(snap models.MarketSnapshot) models.OIDeltaSignal {
+	change := snap.OpenInterest.OIChange1h
+
+	var velocity, description string
+	alert := false
+
+	switch {
+	case change > 5:
+		velocity = "surging"
+		description = fmt.Sprintf("OI surging +%.1f%% in 1h — aggressive leverage entering", change)
+		alert = true
+	case change > 2:
+		velocity = "rising"
+		description = fmt.Sprintf("OI rising +%.1f%% in 1h — new positions building", change)
+	case change > -2:
+		velocity = "stable"
+		description = "OI stable — no significant leverage change"
+	case change > -5:
+		velocity = "falling"
+		description = fmt.Sprintf("OI falling %.1f%% in 1h — positions unwinding", change)
+	default:
+		velocity = "collapsing"
+		description = fmt.Sprintf("OI collapsing %.1f%% in 1h — rapid deleveraging", change)
+		alert = true
+	}
+
+	return models.OIDeltaSignal{
+		ChangePercent: change,
+		Velocity:      velocity,
+		Alert:         alert,
+		Description:   description,
 	}
 }
 

@@ -6,6 +6,13 @@ import (
 	"strconv"
 )
 
+// DefaultSymbols is the full list of supported symbols (Bybit, Binance, OKX).
+var DefaultSymbols = []string{
+	"BTC", "ETH", "SOL", "ARB", "DOGE", "AVAX",
+	"WLD", "SUI", "OP", "INJ", "TIA", "PENDLE",
+	"XRP", "BNB", "LINK", "TON",
+}
+
 type Config struct {
 	Port                 string
 	AnthropicAPIKey      string
