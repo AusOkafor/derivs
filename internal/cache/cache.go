@@ -99,6 +99,7 @@ func (c *Cache) Size() int {
 	return n
 }
 
+
 // LastFetchTime returns the most recent cache update.
 func (c *Cache) LastFetchTime() time.Time {
 	c.mu.RLock()

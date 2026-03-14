@@ -303,6 +303,14 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 			momentum := h.cache.GetPriceMomentum(symbol)
 			sigs := engine.Analyze(snap, momentum)
 			fg := h.calc.Calculate(snap)
+			// Populate cache so Size() reflects usage
+			h.cache.Set(symbol, models.SnapshotWithAnalysis{
+				Snapshot:  snap,
+				Analysis:  models.AIAnalysis{},
+				Alerts:    h.detector.Analyze(snap, sigs),
+				FearGreed: fg,
+				Signals:   sigs,
+			})
 			mu.Lock()
 			results[idx] = models.TickerResult{
 				Symbol:    symbol,
