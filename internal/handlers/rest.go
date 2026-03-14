@@ -70,6 +70,18 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 			if cached.Snapshot.Symbol != symbol {
 				log.Printf("GetSnapshot: cache symbol mismatch: requested %s, got %s", symbol, cached.Snapshot.Symbol)
 			}
+			// Merge fresh RecentLiquidations (cache may have been populated by GetTickers without it)
+			if h.liqFeed != nil {
+				recent := h.liqFeed.GetRecent(symbol)
+				burst, burstSize := h.liqFeed.GetBurst(symbol)
+				cached.Snapshot.RecentLiquidations = &models.RecentLiquidations{
+					TotalLongUSD:  recent.TotalLong,
+					TotalShortUSD: recent.TotalShort,
+					BurstDetected: burst,
+					BurstSizeUSD:  burstSize,
+					Window:        "5m",
+				}
+			}
 			w.Header().Set("X-Cache", "HIT")
 			writeJSON(w, http.StatusOK, cached)
 			return
@@ -115,6 +127,15 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		sentry.CaptureException(err)
 		ai = models.AIAnalysis{Symbol: symbol, Summary: "Analysis temporarily unavailable", Sentiment: "neutral", Confidence: 0, GeneratedAt: time.Now().UTC()}
+	}
+	if ai.GeneratedAt.IsZero() {
+		ai = models.AIAnalysis{
+			Symbol:      symbol,
+			Summary:     "Upgrade to Pro to unlock AI-powered market analysis.",
+			Sentiment:   "neutral",
+			Confidence:  0,
+			GeneratedAt: time.Now().UTC(),
+		}
 	}
 
 	result := models.SnapshotWithAnalysis{
@@ -296,6 +317,17 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.cache.RecordPrice(symbol, snap.LiquidationMap.CurrentPrice)
+			if h.liqFeed != nil {
+				recent := h.liqFeed.GetRecent(symbol)
+				burst, burstSize := h.liqFeed.GetBurst(symbol)
+				snap.RecentLiquidations = &models.RecentLiquidations{
+					TotalLongUSD:  recent.TotalLong,
+					TotalShortUSD: recent.TotalShort,
+					BurstDetected: burst,
+					BurstSizeUSD:  burstSize,
+					Window:        "5m",
+				}
+			}
 			price, change24h, tickErr := h.aggregator.FetchTicker(ctx, symbol)
 			if tickErr != nil {
 				price = snap.LiquidationMap.CurrentPrice
