@@ -493,6 +493,28 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Notify admin of new subscriber
+	go func() {
+		tier, _, _ := h.db.GetSubscriberTier(context.Background(), telegramUsername)
+		if tier == "" {
+			tier = "free"
+		}
+		msg := fmt.Sprintf(
+			"🎉 New Subscriber!\n\n"+
+				"Username: @%s\n"+
+				"Tier: %s\n"+
+				"Symbols: %v\n"+
+				"Time: %s UTC",
+			telegramUsername,
+			tier,
+			req.Symbols,
+			time.Now().UTC().Format("2006-01-02 15:04:05"),
+		)
+		if err := h.notifier.SendToAdmin(msg); err != nil {
+			log.Printf("subscribe: SendToAdmin: %v", err)
+		}
+	}()
+
 	if isManual {
 		// Manual signup: no chat_id yet — user must send /start to bot
 		writeJSON(w, http.StatusCreated, map[string]string{

@@ -11,7 +11,9 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -204,6 +206,20 @@ func (t *TelegramNotifier) PostTopAlert(alert models.Alert, snap models.MarketSn
 		firstLine,
 	)
 	return t.PostToChannel(msg)
+}
+
+// SendToAdmin sends a message to the admin's personal Telegram chat.
+// Set ADMIN_TELEGRAM_CHAT_ID in env (get it from @userinfobot on Telegram).
+func (t *TelegramNotifier) SendToAdmin(message string) error {
+	adminChatID := os.Getenv("ADMIN_TELEGRAM_CHAT_ID")
+	if adminChatID == "" {
+		return nil
+	}
+	id, err := strconv.ParseInt(adminChatID, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return t.SendMessage(context.Background(), id, message)
 }
 
 // VerifyAuth validates Telegram Login Widget auth data using HMAC-SHA256.
