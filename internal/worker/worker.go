@@ -361,15 +361,10 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 				continue
 			}
 
-			// HIGH severity: visual card (same as public channel); MEDIUM/LOW: formatted text
-			if ca.alert.Severity == "high" || ca.alert.Severity == "HIGH" {
-				if err := w.notifier.SendAlertCardToUser(ctx, sub.ChatID, ca.alert, ca.snap, ca.sigs); err != nil {
-					log.Printf("worker: SendAlertCardToUser(chat=%d): %v", sub.ChatID, err)
-					// Fallback to text
-					msg := formatAlertMessage(ca.sym, ca.alert, ca.snap, ca.sigs)
-					_ = w.notifier.SendMessage(ctx, sub.ChatID, msg)
-				}
-			} else {
+			// Use formatted alert for all alerts (Pro and Free)
+			if err := w.notifier.SendAlertCardToUser(ctx, sub.ChatID, ca.alert, ca.snap, ca.sigs); err != nil {
+				log.Printf("worker: SendAlertCardToUser(chat=%d): %v", sub.ChatID, err)
+				// Fallback to formatted text
 				msg := formatAlertMessage(ca.sym, ca.alert, ca.snap, ca.sigs)
 				if err := w.notifier.SendMessage(ctx, sub.ChatID, msg); err != nil {
 					log.Printf("worker: SendMessage(chat=%d): %v", sub.ChatID, err)

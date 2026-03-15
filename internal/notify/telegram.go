@@ -281,7 +281,8 @@ func (t *TelegramNotifier) SendAlertCardToUser(ctx context.Context, chatID int64
 		}
 		return nil
 	}
-	msg := fmt.Sprintf("🔴 HIGH ALERT — %s\n%s\n\nFull dashboard → derivlens.io", alert.Symbol, alert.Message)
+	sev := severityEmoji(alert.Severity)
+	msg := fmt.Sprintf("%s %s ALERT — %s\n%s\n\nFull dashboard → derivlens.io", sev, strings.ToUpper(alert.Severity), alert.Symbol, alert.Message)
 	return t.SendMessage(ctx, chatID, msg)
 }
 
