@@ -143,15 +143,17 @@ func GenerateAlertCard(data AlertCardData) ([]byte, error) {
 	}
 	drawText(img, cx, 530, fundingText, fundingColor, false)
 
-	// Bottom bar (50→75, 49→74)
-	fillRect(img, 0, cardHeight-75, cardWidth, cardHeight-74, borderColor)
+	// Bottom bar at cardHeight-60
+	fillRect(img, 0, cardHeight-60, cardWidth, cardHeight-59, borderColor)
 
-	// Bottom left — derivlens.io branding (20→30, 140→210)
+	// Left: "DerivLens" in green
 	drawText(img, 60, cardHeight-30, "DerivLens", accentGreen, false)
-	drawText(img, 210, cardHeight-30, "— Crypto Derivatives Intelligence", textMuted, false)
 
-	// Bottom right — derivlens.io (160→240)
-	drawText(img, cardWidth-240, cardHeight-30, "derivlens.io", textMuted, false)
+	// Center: tagline
+	drawText(img, cardWidth/2-150, cardHeight-30, "Crypto Derivatives Intelligence", textMuted, false)
+
+	// Right: URL
+	drawText(img, cardWidth-180, cardHeight-30, "derivlens.io", textMuted, false)
 
 	// Encode to PNG
 	var buf bytes.Buffer

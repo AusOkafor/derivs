@@ -287,6 +287,11 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			distanceToZone = 0
 		}
 
+		// Skip zones at current price — 0.1% minimum distance
+		if distanceToZone < 0.1 {
+			continue
+		}
+
 		severity := zoneSeverity(zone, distanceToZone)
 		if severity == "" {
 			continue
