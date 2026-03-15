@@ -170,7 +170,9 @@ func (w *Worker) runCycleFree(ctx context.Context) {
 		return
 	}
 	defer w.freeRunning.Store(false)
-	w.runCycle(ctx, false) // freeCycle = not pro
+	log.Printf("[worker] free cycle starting")
+	n := w.runCycle(ctx, false) // freeCycle = not pro
+	log.Printf("[worker] free cycle done, processed %d subscribers", n)
 }
 
 // runCyclePro runs for pro-tier subscribers only, 1-min interval, all symbols.
@@ -200,6 +202,9 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 	}
 
 	// Filter by tier.
+	if !proOnly {
+		log.Printf("[worker] free cycle GetActiveSubscribers returned %d total", len(subscribers))
+	}
 	var filtered []supabase.Subscriber
 	for _, sub := range subscribers {
 		tier := sub.Tier
@@ -216,7 +221,13 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 	}
 	subscribers = filtered
 	if len(subscribers) == 0 {
+		if !proOnly {
+			log.Printf("[worker] free cycle no free/basic subscribers after filter")
+		}
 		return 0
+	}
+	if !proOnly {
+		log.Printf("[worker] free cycle %d subscribers after tier filter", len(subscribers))
 	}
 
 	// Collect symbols using allowedSymbols per subscriber.
@@ -244,6 +255,8 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		snapshots[sym] = symbolAlerts{detected: alerts}
 		if proOnly {
 			log.Printf("worker: pro cycle found %d alerts for %s", len(alerts), sym)
+		} else {
+			log.Printf("[worker] free cycle found %d alerts for %s", len(alerts), sym)
 		}
 		// Log every alert that fires to alert_history (regardless of subscriber dedup)
 		for _, alert := range alerts {
@@ -255,6 +268,9 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 
 	for _, sub := range subscribers {
 		if sub.ChatID == 0 {
+			if !proOnly {
+				log.Printf("[worker] free cycle skipping @%s: ChatID=0 (user must send /start to bot)", sub.TelegramUsername)
+			}
 			continue
 		}
 
@@ -344,6 +360,8 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 
 			if proOnly {
 				log.Printf("worker: pro cycle sending alert to %s: %s", sub.TelegramUsername, ca.alert.Message)
+			} else {
+				log.Printf("[worker] free cycle sent alert to @%s: %s — %s", sub.TelegramUsername, ca.alert.ID, ca.sym)
 			}
 			sentThisCycle[cycleKey] = true
 			sentPerSymbol[ca.sym]++
