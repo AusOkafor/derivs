@@ -107,17 +107,32 @@ func aggregateLiquidationZones(levels []models.LiquidationLevel, currentPrice fl
 	return zones
 }
 
+const (
+	highSeverityMinSize = 500_000 // $500k minimum for HIGH
+	medSeverityMinSize  = 100_000 // $100k minimum for MEDIUM
+)
+
 func zoneSeverity(zone LiquidationZone, distance float64) string {
-	if zone.TotalUSD >= 1_000_000 && distance <= 1.5 {
+	if zone.TotalUSD >= highSeverityMinSize && distance <= 1.5 {
 		return "high"
 	}
-	if zone.HasWhale && distance <= 1.0 {
+	if zone.HasWhale && zone.TotalUSD >= highSeverityMinSize && distance <= 1.0 {
 		return "high"
 	}
-	if zone.TotalUSD >= 300_000 && distance <= 3.0 {
+	if zone.TotalUSD >= medSeverityMinSize && distance <= 3.0 {
 		return "medium"
 	}
 	return ""
+}
+
+func formatUSD(usd float64) string {
+	if usd >= 1_000_000 {
+		return fmt.Sprintf("$%.2fM", usd/1_000_000)
+	}
+	if usd >= 1_000 {
+		return fmt.Sprintf("$%.2fk", usd/1_000)
+	}
+	return fmt.Sprintf("$%.0f", usd)
 }
 
 func formatPrice(p float64) string {
@@ -385,33 +400,49 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
 	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
-		magnetRound := 10.0
-		if m.Price < 100 {
-			magnetRound = 1.0
-		} else if m.Price < 1000 {
-			magnetRound = 5.0
-		}
-		roundedMagnetPrice := math.Round(m.Price/magnetRound) * magnetRound
-		fundingCtx := "neutral funding"
-		if snap.FundingRate.Rate < -0.0001 {
-			fundingCtx = "negative funding — shorts vulnerable"
-		} else if snap.FundingRate.Rate > 0.0003 {
-			fundingCtx = "elevated funding — longs vulnerable"
-		}
-		oiCtx := fmt.Sprintf("OI %.1f%% in 24h", snap.OpenInterest.OIChange24h)
-		id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
-
-		if !checkAndSetCooldown(symbol, "liq-magnet", 30*time.Minute) {
-			a := models.Alert{
-				ID:       fmt.Sprintf("%s-%s", snap.Symbol, id),
-				Symbol:   snap.Symbol,
-				Message:  fmt.Sprintf("Liquidity sweep alert: large %s cluster at %s (%.2f%% away)\n\nMarket context:\n• %s\n• %s\n• %s\n\nSweep probability: %d%%", m.Side, formatPrice(m.Price), m.Distance, fundingCtx, oiCtx, sigs.LeverageImbalance, m.Probability),
-				Severity: "high",
-				Timestamp: now,
+		// Don't fire liquidation sweep alerts when distance < 0.1%
+		// This prevents "at current price" alerts that are too late
+		if m.Distance >= 0.1 {
+			magnetRound := 10.0
+			if m.Price < 100 {
+				magnetRound = 1.0
+			} else if m.Price < 1000 {
+				magnetRound = 5.0
 			}
-			out = append(out, a)
-			if OnHighAlert != nil {
-				OnHighAlert(a, snap, sigs)
+			roundedMagnetPrice := math.Round(m.Price/magnetRound) * magnetRound
+			id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
+
+			if !checkAndSetCooldown(symbol, "liq-magnet", 30*time.Minute) {
+				distance := m.Distance // already in %
+				probability := m.Probability
+				var message string
+				if m.Side == "short" {
+					// Short cluster above = upward sweep likely
+					message = fmt.Sprintf(
+						"Short liquidity above price — upward sweep likely\n\n"+
+							"Cluster: %s | Distance: %.2f%% | Probability: %d%%",
+						formatUSD(m.SizeUSD), distance, probability,
+					)
+				} else {
+					// Long cluster below = downward sweep likely
+					message = fmt.Sprintf(
+						"Long liquidity below price — downward sweep likely\n\n"+
+							"Cluster: %s | Distance: %.2f%% | Probability: %d%%",
+						formatUSD(m.SizeUSD), distance, probability,
+					)
+				}
+
+				a := models.Alert{
+					ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
+					Symbol:    snap.Symbol,
+					Message:   message,
+					Severity:  "high",
+					Timestamp: now,
+				}
+				out = append(out, a)
+				if OnHighAlert != nil {
+					OnHighAlert(a, snap, sigs)
+				}
 			}
 		}
 	}

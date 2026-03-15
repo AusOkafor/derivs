@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -435,56 +434,45 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 		return candidates[i].Score > candidates[j].Score
 	})
 
-	top := candidates[0]
-	magnet := top.Signals.LiquidationMagnet
-
-	direction := "upward sweep"
-	clusterType := "Short liquidations"
-	if magnet.Side == "long" {
-		direction = "downward sweep"
-		clusterType = "Long liquidations"
+	// Show top 3 as ranked heat feed
+	topN := 3
+	if len(candidates) < topN {
+		topN = len(candidates)
 	}
 
-	message := fmt.Sprintf(
-		`🔥 <b>TOP LIQUIDITY TARGET</b>
+	var sb strings.Builder
+	sb.WriteString("🔥 <b>LIQUIDITY HEAT FEED</b>\n\n")
 
-<b>%s</b> — %s
+	for i := 0; i < topN; i++ {
+		tc := candidates[i]
+		magnet := tc.Signals.LiquidationMagnet
+		clusterDesc := "Short cluster"
+		if magnet.Side == "long" {
+			clusterDesc = "Long cluster"
+		}
+		sizeStr := formatUSDWorker(magnet.SizeUSD)
+		rank := []string{"1️⃣", "2️⃣", "3️⃣"}[i]
+		sb.WriteString(fmt.Sprintf("%s <b>%s</b> — %s %s\n",
+			rank, tc.Symbol, clusterDesc, sizeStr))
+		sb.WriteString(fmt.Sprintf("   Distance: %.2f%% | Prob: %d%% | CASCADE: %s\n\n",
+			magnet.Distance, magnet.Probability, tc.Signals.CascadeRisk.Level))
+	}
 
-Price: %s
-Target: %s
-Distance: %.2f%%
+	sb.WriteString("📊 Full dashboard → derivlens.io\n")
+	sb.WriteString("🔔 Get alerts → t.me/derivlens_signals")
 
-%s building
-Sweep Probability: <b>%d%%</b>
-Cascade Risk: %s (%d/100)
-Gravity: %.1f%% %s
+	message := sb.String()
 
-Expected move: <b>%s</b>
-
-📊 Full dashboard → derivlens.io
-🔔 Get alerts → t.me/derivlens_signals`,
-		top.Symbol,
-		clusterType,
-		formatPriceStr(top.Snap.LiquidationMap.CurrentPrice),
-		formatPriceStr(magnet.Price),
-		magnet.Distance,
-		clusterType,
-		magnet.Probability,
-		top.Signals.CascadeRisk.Level,
-		top.Signals.CascadeRisk.Score,
-		math.Max(top.Signals.LiquidityGravity.UpwardPull, top.Signals.LiquidityGravity.DownwardPull),
-		top.Signals.LiquidityGravity.Dominant,
-		direction,
-	)
-
+	top := candidates[0]
+	magnet := top.Signals.LiquidationMagnet
 	if magnet.Probability >= 80 && top.Alert != nil {
 		w.notifier.PostTopAlert(*top.Alert, top.Snap, top.Signals)
 	} else {
 		w.notifier.PostToChannel(message)
 	}
 
-	log.Printf("[worker] top target broadcast: %s score=%.0f prob=%d%%",
-		top.Symbol, top.Score, magnet.Probability)
+	log.Printf("[worker] top target broadcast: top %d — %s score=%.0f prob=%d%%",
+		topN, top.Symbol, top.Score, magnet.Probability)
 }
 
 func formatPriceStr(p float64) string {
@@ -494,6 +482,16 @@ func formatPriceStr(p float64) string {
 		return fmt.Sprintf("$%.3f", p)
 	}
 	return fmt.Sprintf("$%.4f", p)
+}
+
+func formatUSDWorker(usd float64) string {
+	if usd >= 1_000_000 {
+		return fmt.Sprintf("$%.2fM", usd/1_000_000)
+	}
+	if usd >= 1_000 {
+		return fmt.Sprintf("$%.2fk", usd/1_000)
+	}
+	return fmt.Sprintf("$%.0f", usd)
 }
 
 // shouldSendAlert checks whether a subscriber's rules JSONB permits a given alert.

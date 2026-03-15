@@ -761,6 +761,17 @@ func calcCascadeRisk(snap models.MarketSnapshot, sig models.MarketSignals) model
 		score = 100
 	}
 
+	// If magnet probability >= 85%, cascade score should be at least MEDIUM (25+)
+	if sig.LiquidationMagnet != nil && sig.LiquidationMagnet.Probability >= 85 {
+		if score < 25 {
+			score = 25
+			factors = append(factors, fmt.Sprintf(
+				"High sweep probability %.0f%% overrides low cascade score",
+				float64(sig.LiquidationMagnet.Probability),
+			))
+		}
+	}
+
 	var level, description string
 	switch {
 	case score >= 75:
