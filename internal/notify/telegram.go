@@ -163,83 +163,141 @@ func (t *TelegramNotifier) PostToChannel(message string) error {
 	return nil
 }
 
-// SendAlertCardToUser sends the visual card (same as PostTopAlert) to a specific user's chat.
-// Used for HIGH severity alerts to free and pro subscribers.
-func (t *TelegramNotifier) SendAlertCardToUser(ctx context.Context, chatID int64, alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) error {
-	if (alert.Severity == "high" || alert.Severity == "HIGH") && sigs.LiquidationMagnet != nil {
-		magnet := sigs.LiquidationMagnet
-		data := cards.AlertCardData{
-			Symbol:       alert.Symbol,
-			Severity:     "HIGH",
-			AlertType:    "Liquidity Sweep",
-			Price:        snap.LiquidationMap.CurrentPrice,
-			ClusterPrice: magnet.Price,
-			ClusterSize:  magnet.SizeUSD,
-			Distance:     magnet.Distance / 100,
-			SweepProb:    magnet.Probability,
-			CascadeLevel: sigs.CascadeRisk.Level,
-			CascadeScore: sigs.CascadeRisk.Score,
-			GravityDir:   sigs.LiquidityGravity.Dominant,
-			GravityPct:   math.Max(sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.DownwardPull),
-			Funding:      snap.FundingRate.Rate,
-			OIChange:     snap.OpenInterest.OIChange1h,
-		}
-		imgBytes, err := cards.GenerateAlertCard(data)
-		if err == nil {
-			firstLine := alert.Message
-			if idx := strings.Index(alert.Message, "\n"); idx > 0 {
-				firstLine = alert.Message[:idx]
-			}
-			caption := fmt.Sprintf("🔴 HIGH ALERT — %s\n%s\n\nFull dashboard → derivlens.io", alert.Symbol, firstLine)
-			return t.SendPhoto(strconv.FormatInt(chatID, 10), imgBytes, caption)
-		}
+// buildAlertCardData constructs AlertCardData from alert, snap, and signals.
+func buildAlertCardData(alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) *cards.AlertCardData {
+	if sigs.LiquidationMagnet == nil {
+		return nil
 	}
-	// Fallback to text
+	magnet := sigs.LiquidationMagnet
+	return &cards.AlertCardData{
+		Symbol:       alert.Symbol,
+		Severity:     "HIGH",
+		AlertType:    "Liquidity Sweep",
+		Price:        snap.LiquidationMap.CurrentPrice,
+		ClusterPrice: magnet.Price,
+		ClusterSize:  magnet.SizeUSD,
+		Distance:     magnet.Distance / 100,
+		SweepProb:    magnet.Probability,
+		CascadeLevel: sigs.CascadeRisk.Level,
+		CascadeScore: sigs.CascadeRisk.Score,
+		GravityDir:   sigs.LiquidityGravity.Dominant,
+		GravityPct:   math.Max(sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.DownwardPull),
+		Funding:      snap.FundingRate.Rate,
+		OIChange:     snap.OpenInterest.OIChange1h,
+	}
+}
+
+// formatPriceForAlert formats price for Telegram message.
+func formatPriceForAlert(p float64) string {
+	if p >= 1000 {
+		return fmt.Sprintf("$%.2f", p)
+	}
+	if p >= 1 {
+		return fmt.Sprintf("$%.3f", p)
+	}
+	return fmt.Sprintf("$%.4f", p)
+}
+
+// formatUSDForAlert formats USD for Telegram message.
+func formatUSDForAlert(v float64) string {
+	if v >= 1_000_000 {
+		return fmt.Sprintf("$%.2fM", v/1_000_000)
+	}
+	if v >= 1_000 {
+		return fmt.Sprintf("$%.1fK", v/1_000)
+	}
+	return fmt.Sprintf("$%.0f", v)
+}
+
+// SendFormattedAlert sends a richly formatted text alert (no image) using HTML.
+// Clean formatted text looks better than blurry images on all devices.
+func (t *TelegramNotifier) SendFormattedAlert(ctx context.Context, chatID string, data cards.AlertCardData) error {
+	sevEmoji := "🔴"
+	if data.Severity == "MEDIUM" {
+		sevEmoji = "🟡"
+	}
+	direction := "⬆️ Upward sweep likely"
+	if data.ClusterPrice < data.Price {
+		direction = "⬇️ Downward sweep likely"
+	}
+	message := fmt.Sprintf(
+		"%s <b>%s — Liquidity Sweep</b>\n\n"+
+			"💰 <b>Price:</b> %s\n"+
+			"🎯 <b>Target:</b> %s\n"+
+			"📏 <b>Distance:</b> %.2f%%\n"+
+			"💵 <b>Cluster:</b> %s\n\n"+
+			"📊 <b>Sweep Probability:</b> %d%%\n"+
+			"⚡ <b>Cascade Risk:</b> %s (%d/100)\n"+
+			"🌊 <b>Gravity:</b> %.1f%% %s\n"+
+			"💸 <b>Funding:</b> %.4f%%\n\n"+
+			"%s\n\n"+
+			"📈 <a href=\"https://derivlens.io\">Full dashboard</a> │ 🔔 <a href=\"https://t.me/derivlens_signals\">Get alerts</a>",
+		sevEmoji, data.Symbol,
+		formatPriceForAlert(data.Price),
+		formatPriceForAlert(data.ClusterPrice),
+		data.Distance*100,
+		formatUSDForAlert(data.ClusterSize),
+		data.SweepProb,
+		data.CascadeLevel,
+		data.CascadeScore,
+		data.GravityPct,
+		data.GravityDir,
+		data.Funding*100,
+		direction,
+	)
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.botToken)
+	payload := map[string]interface{}{
+		"chat_id":                  chatID,
+		"text":                     message,
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": true,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("telegram: marshal formatted alert: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("telegram: build formatted alert request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("telegram: send formatted alert: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram: formatted alert status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// SendAlertCardToUser sends formatted alert text (no image) to a specific user's chat.
+func (t *TelegramNotifier) SendAlertCardToUser(ctx context.Context, chatID int64, alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) error {
+	data := buildAlertCardData(alert, snap, sigs)
+	if data != nil {
+		if err := t.SendFormattedAlert(ctx, strconv.FormatInt(chatID, 10), *data); err != nil {
+			return err
+		}
+		return nil
+	}
 	msg := fmt.Sprintf("🔴 HIGH ALERT — %s\n%s\n\nFull dashboard → derivlens.io", alert.Symbol, alert.Message)
 	return t.SendMessage(ctx, chatID, msg)
 }
 
-// PostTopAlert posts a HIGH severity alert to the public channel as a free preview.
-// When severity is HIGH and signals include a liquidation magnet, generates and sends a visual card.
+// PostTopAlert posts a HIGH severity alert to the public channel as formatted text (no image).
 func (t *TelegramNotifier) PostTopAlert(alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) error {
-	if (alert.Severity == "high" || alert.Severity == "HIGH") && sigs.LiquidationMagnet != nil {
-		magnet := sigs.LiquidationMagnet
-		data := cards.AlertCardData{
-			Symbol:       alert.Symbol,
-			Severity:     "HIGH",
-			AlertType:    "Liquidity Sweep",
-			Price:        snap.LiquidationMap.CurrentPrice,
-			ClusterPrice: magnet.Price,
-			ClusterSize:  magnet.SizeUSD,
-			Distance:     magnet.Distance / 100, // magnet.Distance is % (1.5); card expects decimal (0.015)
-			SweepProb:    magnet.Probability,
-			CascadeLevel: sigs.CascadeRisk.Level,
-			CascadeScore: sigs.CascadeRisk.Score,
-			GravityDir:   sigs.LiquidityGravity.Dominant,
-			GravityPct:   math.Max(sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.DownwardPull),
-			Funding:      snap.FundingRate.Rate,
-			OIChange:     snap.OpenInterest.OIChange1h,
-		}
-		imgBytes, err := cards.GenerateAlertCard(data)
-		if err == nil {
-			firstLine := alert.Message
-			if idx := strings.Index(alert.Message, "\n"); idx > 0 {
-				firstLine = alert.Message[:idx]
-			}
-			caption := fmt.Sprintf("🔴 HIGH ALERT — %s\n%s\n\nFull dashboard → derivlens.io", alert.Symbol, firstLine)
-			return t.SendPhoto("@derivlens_signals", imgBytes, caption)
-		}
+	data := buildAlertCardData(alert, snap, sigs)
+	if data != nil {
+		return t.SendFormattedAlert(context.Background(), "@derivlens_signals", *data)
 	}
-
-	// Fallback to text
 	firstLine := alert.Message
 	if idx := strings.Index(alert.Message, "\n"); idx > 0 {
 		firstLine = alert.Message[:idx]
 	}
 	msg := fmt.Sprintf(
 		"🚨 HIGH ALERT — %s\n%s\n\nFull signal → derivlens.io\nGet alerts → t.me/derivlens_signals",
-		alert.Symbol,
-		firstLine,
+		alert.Symbol, firstLine,
 	)
 	return t.PostToChannel(msg)
 }

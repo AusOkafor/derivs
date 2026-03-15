@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"log"
 	"math"
 
 	"golang.org/x/image/font"
@@ -29,20 +30,35 @@ var (
 
 func init() {
 	regularFont, err := opentype.Parse(goregular.TTF)
-	if err == nil {
-		regularFace, _ = opentype.NewFace(regularFont, &opentype.FaceOptions{
-			Size:    18,
-			DPI:     216,
-			Hinting: font.HintingFull,
-		})
+	if err != nil {
+		log.Printf("[cards] failed to parse regular font: %v", err)
+		return
 	}
+	regularFace, err = opentype.NewFace(regularFont, &opentype.FaceOptions{
+		Size:    18,
+		DPI:     216,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		log.Printf("[cards] failed to create regular face: %v", err)
+	} else {
+		log.Printf("[cards] regular font loaded successfully")
+	}
+
 	boldFont, err := opentype.Parse(gobold.TTF)
-	if err == nil {
-		boldFace, _ = opentype.NewFace(boldFont, &opentype.FaceOptions{
-			Size:    22,
-			DPI:     216,
-			Hinting: font.HintingFull,
-		})
+	if err != nil {
+		log.Printf("[cards] failed to parse bold font: %v", err)
+		return
+	}
+	boldFace, err = opentype.NewFace(boldFont, &opentype.FaceOptions{
+		Size:    22,
+		DPI:     216,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		log.Printf("[cards] failed to create bold face: %v", err)
+	} else {
+		log.Printf("[cards] bold font loaded successfully")
 	}
 }
 
