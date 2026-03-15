@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -244,6 +245,8 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 
 	type symbolAlerts struct {
 		detected []models.Alert
+		snap     models.MarketSnapshot
+		sigs     models.MarketSignals
 	}
 	snapshots := make(map[string]symbolAlerts, len(symbolSet))
 
@@ -256,7 +259,7 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		}
 		sigs := engine.Analyze(snap, 0)
 		alerts := w.detector.Analyze(snap, sigs)
-		snapshots[sym] = symbolAlerts{detected: alerts}
+		snapshots[sym] = symbolAlerts{detected: alerts, snap: snap, sigs: sigs}
 		if proOnly {
 			log.Printf("worker: pro cycle found %d alerts for %s", len(alerts), sym)
 		} else {
@@ -278,10 +281,12 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 			continue
 		}
 
-		// Collect all (symbol, alert) pairs that pass rules filter
+		// Collect all (symbol, alert, snap, sigs) that pass rules filter
 		type symAlert struct {
 			sym   string
 			alert models.Alert
+			snap  models.MarketSnapshot
+			sigs  models.MarketSignals
 		}
 		var candidates []symAlert
 		for _, sym := range allowedSymbols(sub) {
@@ -293,7 +298,7 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 				if !w.shouldSendAlert(sub.Rules, alert) {
 					continue
 				}
-				candidates = append(candidates, symAlert{sym: sym, alert: alert})
+				candidates = append(candidates, symAlert{sym: sym, alert: alert, snap: sa.snap, sigs: sa.sigs})
 			}
 		}
 
@@ -356,10 +361,20 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 				continue
 			}
 
-			msg := w.notifier.FormatAlert(ca.sym, ca.alert)
-			if err := w.notifier.SendMessage(ctx, sub.ChatID, msg); err != nil {
-				log.Printf("worker: SendMessage(chat=%d): %v", sub.ChatID, err)
-				continue
+			// HIGH severity: visual card (same as public channel); MEDIUM/LOW: formatted text
+			if ca.alert.Severity == "high" || ca.alert.Severity == "HIGH" {
+				if err := w.notifier.SendAlertCardToUser(ctx, sub.ChatID, ca.alert, ca.snap, ca.sigs); err != nil {
+					log.Printf("worker: SendAlertCardToUser(chat=%d): %v", sub.ChatID, err)
+					// Fallback to text
+					msg := formatAlertMessage(ca.sym, ca.alert, ca.snap, ca.sigs)
+					_ = w.notifier.SendMessage(ctx, sub.ChatID, msg)
+				}
+			} else {
+				msg := formatAlertMessage(ca.sym, ca.alert, ca.snap, ca.sigs)
+				if err := w.notifier.SendMessage(ctx, sub.ChatID, msg); err != nil {
+					log.Printf("worker: SendMessage(chat=%d): %v", sub.ChatID, err)
+					continue
+				}
 			}
 
 			if proOnly {
@@ -495,6 +510,46 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 
 	log.Printf("[worker] top target broadcast: top %d — %s score=%.0f prob=%d%%",
 		topN, top.Symbol, top.Score, magnet.Probability)
+}
+
+// formatAlertMessage produces the same clean format as the public channel text alerts.
+func formatAlertMessage(symbol string, alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) string {
+	magnet := sigs.LiquidationMagnet
+	if magnet == nil {
+		return alert.Message
+	}
+	return fmt.Sprintf(`%s — %s
+
+%s
+
+Sweep Probability: %d%%
+Cascade Risk: %s (%d/100)
+Liquidity Pressure: %+d (%s)
+Gravity: %.1f%% %s
+
+📊 Full dashboard → derivlens.io`,
+		severityEmojiWorker(alert.Severity),
+		symbol,
+		alert.Message,
+		magnet.Probability,
+		sigs.CascadeRisk.Level,
+		sigs.CascadeRisk.Score,
+		sigs.LiquidityPressure.Score,
+		sigs.LiquidityPressure.Label,
+		math.Max(sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.DownwardPull),
+		sigs.LiquidityGravity.Dominant,
+	)
+}
+
+func severityEmojiWorker(severity string) string {
+	switch strings.ToLower(severity) {
+	case "high":
+		return "🔴 HIGH ALERT"
+	case "medium":
+		return "🟡 MEDIUM ALERT"
+	default:
+		return "🔵 ALERT"
+	}
 }
 
 func formatPriceStr(p float64) string {
