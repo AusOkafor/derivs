@@ -156,7 +156,12 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	var out []models.Alert
 	now := time.Now().UTC()
 
+	symbol := snap.Symbol
 	add := func(id, msg, severity string) {
+		// Global HIGH alert cooldown per symbol — max 1 HIGH per 15 min regardless of rule type
+		if severity == "high" && checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
+			return // skip — already sent HIGH alert for this symbol recently
+		}
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:    snap.Symbol,
@@ -169,7 +174,6 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			OnHighAlert(a, snap, sigs)
 		}
 	}
-	symbol := snap.Symbol
 
 	// ── Rule 0: Liquidation burst (real-time from Binance) ─────────────────────
 	if snap.RecentLiquidations != nil && snap.RecentLiquidations.BurstDetected {
@@ -287,6 +291,10 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		if severity == "" {
 			continue
 		}
+		// Global HIGH cooldown — skip this zone if we already sent a HIGH for this symbol recently
+		if severity == "high" && checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
+			continue
+		}
 
 		midPrice := (zone.MinPrice + zone.MaxPrice) / 2
 		zoneID := fmt.Sprintf("%s-zone-%.0f", symbol, math.Round(midPrice/5)*5)
@@ -367,6 +375,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 
 	// ── Rule 9: Short squeeze probability high ─────────────────────────────────
 	if sigs.ShortSqueezeProbability >= 65 && !checkAndSetCooldown(symbol, "short-squeeze", 30*time.Minute) {
+		if !checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
 		id := fmt.Sprintf("short-squeeze-%d", sigs.ShortSqueezeProbability/10*10)
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
@@ -379,10 +388,12 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		if OnHighAlert != nil {
 			OnHighAlert(a, snap, sigs)
 		}
+		}
 	}
 
 	// ── Rule 10: Long squeeze probability high ──────────────────────────────────
 	if sigs.LongSqueezeProbability >= 65 && !checkAndSetCooldown(symbol, "long-squeeze", 30*time.Minute) {
+		if !checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
 		id := fmt.Sprintf("long-squeeze-%d", sigs.LongSqueezeProbability/10*10)
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
@@ -394,6 +405,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		out = append(out, a)
 		if OnHighAlert != nil {
 			OnHighAlert(a, snap, sigs)
+		}
 		}
 	}
 
@@ -412,7 +424,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			roundedMagnetPrice := math.Round(m.Price/magnetRound) * magnetRound
 			id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
 
-			if !checkAndSetCooldown(symbol, "liq-magnet", 30*time.Minute) {
+			if !checkAndSetCooldown(symbol, "liq-magnet", 30*time.Minute) && !checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
 				distance := m.Distance // already in %
 				probability := m.Probability
 				var message string
@@ -449,6 +461,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 
 	// ── Rule 12: Market regime change to Liquidation Event ──────────────────────
 	if sigs.Regime == models.RegimeLiquidation && !checkAndSetCooldown(symbol, "regime-liquidation", 60*time.Minute) {
+		if !checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
 			Symbol:    snap.Symbol,
@@ -459,6 +472,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		out = append(out, a)
 		if OnHighAlert != nil {
 			OnHighAlert(a, snap, sigs)
+		}
 		}
 	}
 
