@@ -10,14 +10,41 @@ import (
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
 
-// Alert card dimensions
+// Alert card dimensions — 1200x630 matches OG image standard for sharp rendering
 const (
-	cardWidth  = 800
-	cardHeight = 420
+	cardWidth  = 1200
+	cardHeight = 630
 )
+
+var (
+	regularFace font.Face
+	boldFace    font.Face
+)
+
+func init() {
+	regularFont, err := opentype.Parse(goregular.TTF)
+	if err == nil {
+		regularFace, _ = opentype.NewFace(regularFont, &opentype.FaceOptions{
+			Size:    24,
+			DPI:     144,
+			Hinting: font.HintingFull,
+		})
+	}
+	boldFont, err := opentype.Parse(gobold.TTF)
+	if err == nil {
+		boldFace, _ = opentype.NewFace(boldFont, &opentype.FaceOptions{
+			Size:    28,
+			DPI:     144,
+			Hinting: font.HintingFull,
+		})
+	}
+}
 
 // Colors
 var (
@@ -57,56 +84,56 @@ func GenerateAlertCard(data AlertCardData) ([]byte, error) {
 	// Border
 	drawBorder(img, borderColor)
 
-	// Top accent line
+	// Top accent line (scaled 4→6)
 	severityColor := getSeverityColor(data.Severity)
-	fillRect(img, 0, 0, cardWidth, 4, severityColor)
+	fillRect(img, 0, 0, cardWidth, 6, severityColor)
 
-	// Severity badge
+	// Severity badge (40,35 → 60,53)
 	badgeText := fmt.Sprintf("● %s ALERT", data.Severity)
-	drawText(img, 40, 35, badgeText, severityColor, false)
+	drawText(img, 60, 53, badgeText, severityColor, false)
 
-	// Symbol + Alert type
+	// Symbol + Alert type (40,70 → 60,105)
 	symbolText := fmt.Sprintf("%s — %s", data.Symbol, data.AlertType)
-	drawText(img, 40, 70, symbolText, textPrimary, true)
+	drawText(img, 60, 105, symbolText, textPrimary, true)
 
-	// Divider line
-	fillRect(img, 40, 90, cardWidth-40, 91, borderColor)
+	// Divider line (40,90 → 60,135)
+	fillRect(img, 60, 135, cardWidth-60, 137, borderColor)
 
-	// Left column — price data
-	drawText(img, 40, 125, "Current Price", textMuted, false)
-	drawText(img, 40, 148, formatPrice(data.Price), textPrimary, true)
+	// Left column — price data (scaled 1.5x)
+	drawText(img, 60, 188, "Current Price", textMuted, false)
+	drawText(img, 60, 222, formatPrice(data.Price), textPrimary, true)
 
-	drawText(img, 40, 190, "Cluster Level", textMuted, false)
-	drawText(img, 40, 213, formatPrice(data.ClusterPrice), severityColor, true)
+	drawText(img, 60, 285, "Cluster Level", textMuted, false)
+	drawText(img, 60, 320, formatPrice(data.ClusterPrice), severityColor, true)
 
-	drawText(img, 40, 255, "Distance", textMuted, false)
-	drawText(img, 40, 278, fmt.Sprintf("%.2f%%", data.Distance*100), textPrimary, false)
+	drawText(img, 60, 383, "Distance", textMuted, false)
+	drawText(img, 60, 417, fmt.Sprintf("%.2f%%", data.Distance*100), textPrimary, false)
 
-	drawText(img, 40, 320, "Cluster Size", textMuted, false)
-	drawText(img, 40, 343, formatUSD(data.ClusterSize), textPrimary, false)
+	drawText(img, 60, 480, "Cluster Size", textMuted, false)
+	drawText(img, 60, 515, formatUSD(data.ClusterSize), textPrimary, false)
 
-	// Center divider
-	fillRect(img, cardWidth/2-1, 100, cardWidth/2, cardHeight-40, borderColor)
+	// Center divider (100→150, height-40→height-60)
+	fillRect(img, cardWidth/2-1, 150, cardWidth/2, cardHeight-60, borderColor)
 
 	// Right column — signal data
-	cx := cardWidth/2 + 40
+	cx := cardWidth/2 + 60
 
-	drawText(img, cx, 125, "Sweep Probability", textMuted, false)
+	drawText(img, cx, 188, "Sweep Probability", textMuted, false)
 	probColor := getProbColor(data.SweepProb)
-	drawText(img, cx, 148, fmt.Sprintf("%d%%", data.SweepProb), probColor, true)
+	drawText(img, cx, 222, fmt.Sprintf("%d%%", data.SweepProb), probColor, true)
 
-	// Probability bar
-	drawProgressBar(img, cx, 158, 300, 8, data.SweepProb, 100, probColor)
+	// Probability bar (158→237, 300→450, 8→12)
+	drawProgressBar(img, cx, 237, 450, 12, data.SweepProb, 100, probColor)
 
-	drawText(img, cx, 200, "Cascade Risk", textMuted, false)
+	drawText(img, cx, 300, "Cascade Risk", textMuted, false)
 	cascadeColor := getCascadeColor(data.CascadeLevel)
-	drawText(img, cx, 223, fmt.Sprintf("%s  %d/100", data.CascadeLevel, data.CascadeScore), cascadeColor, false)
+	drawText(img, cx, 335, fmt.Sprintf("%s  %d/100", data.CascadeLevel, data.CascadeScore), cascadeColor, false)
 
-	drawText(img, cx, 265, "Liquidity Gravity", textMuted, false)
+	drawText(img, cx, 398, "Liquidity Gravity", textMuted, false)
 	gravityText := fmt.Sprintf("%.1f%% %s", data.GravityPct, data.GravityDir)
-	drawText(img, cx, 288, gravityText, accentGreen, false)
+	drawText(img, cx, 432, gravityText, accentGreen, false)
 
-	drawText(img, cx, 330, "Funding", textMuted, false)
+	drawText(img, cx, 495, "Funding", textMuted, false)
 	fundingText := fmt.Sprintf("%.4f%%", data.Funding*100)
 	fundingColor := textPrimary
 	if data.Funding > 0.0003 {
@@ -114,17 +141,17 @@ func GenerateAlertCard(data AlertCardData) ([]byte, error) {
 	} else if data.Funding < -0.0003 {
 		fundingColor = accentGreen
 	}
-	drawText(img, cx, 353, fundingText, fundingColor, false)
+	drawText(img, cx, 530, fundingText, fundingColor, false)
 
-	// Bottom bar
-	fillRect(img, 0, cardHeight-50, cardWidth, cardHeight-49, borderColor)
+	// Bottom bar (50→75, 49→74)
+	fillRect(img, 0, cardHeight-75, cardWidth, cardHeight-74, borderColor)
 
-	// Bottom left — derivlens.io branding
-	drawText(img, 40, cardHeight-20, "DerivLens", accentGreen, false)
-	drawText(img, 140, cardHeight-20, "— Crypto Derivatives Intelligence", textMuted, false)
+	// Bottom left — derivlens.io branding (20→30, 140→210)
+	drawText(img, 60, cardHeight-30, "DerivLens", accentGreen, false)
+	drawText(img, 210, cardHeight-30, "— Crypto Derivatives Intelligence", textMuted, false)
 
-	// Bottom right — derivlens.io
-	drawText(img, cardWidth-160, cardHeight-20, "derivlens.io", textMuted, false)
+	// Bottom right — derivlens.io (160→240)
+	drawText(img, cardWidth-240, cardHeight-30, "derivlens.io", textMuted, false)
 
 	// Encode to PNG
 	var buf bytes.Buffer
@@ -155,6 +182,24 @@ func drawBorder(img *image.RGBA, c color.RGBA) {
 }
 
 func drawText(img *image.RGBA, x, y int, text string, col color.RGBA, large bool) {
+	face := regularFace
+	if large && boldFace != nil {
+		face = boldFace
+	}
+	if face == nil {
+		drawBasicText(img, x, y, text, col, large)
+		return
+	}
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(col),
+		Face: face,
+		Dot:  fixed.Point26_6{X: fixed.I(x), Y: fixed.I(y)},
+	}
+	d.DrawString(text)
+}
+
+func drawBasicText(img *image.RGBA, x, y int, text string, col color.RGBA, large bool) {
 	face := basicfont.Face7x13
 	d := &font.Drawer{
 		Dst:  img,
@@ -163,7 +208,6 @@ func drawText(img *image.RGBA, x, y int, text string, col color.RGBA, large bool
 		Dot:  fixed.Point26_6{X: fixed.I(x), Y: fixed.I(y)},
 	}
 	if large {
-		// Draw twice offset by 1px for bold effect
 		d.DrawString(text)
 		d.Dot = fixed.Point26_6{X: fixed.I(x + 1), Y: fixed.I(y)}
 		d.DrawString(text)
