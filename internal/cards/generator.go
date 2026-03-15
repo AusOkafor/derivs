@@ -16,10 +16,10 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-// Alert card dimensions — 1200x630 matches OG image standard for sharp rendering
+// Alert card dimensions — 1600x840 for retina quality (2x from 800x420)
 const (
-	cardWidth  = 1200
-	cardHeight = 630
+	cardWidth  = 1600
+	cardHeight = 840
 )
 
 var (
@@ -31,16 +31,16 @@ func init() {
 	regularFont, err := opentype.Parse(goregular.TTF)
 	if err == nil {
 		regularFace, _ = opentype.NewFace(regularFont, &opentype.FaceOptions{
-			Size:    24,
-			DPI:     144,
+			Size:    18,
+			DPI:     216,
 			Hinting: font.HintingFull,
 		})
 	}
 	boldFont, err := opentype.Parse(gobold.TTF)
 	if err == nil {
 		boldFace, _ = opentype.NewFace(boldFont, &opentype.FaceOptions{
-			Size:    28,
-			DPI:     144,
+			Size:    22,
+			DPI:     216,
 			Hinting: font.HintingFull,
 		})
 	}
@@ -84,56 +84,56 @@ func GenerateAlertCard(data AlertCardData) ([]byte, error) {
 	// Border
 	drawBorder(img, borderColor)
 
-	// Top accent line (scaled 4→6)
+	// Top accent line (scaled 4→8)
 	severityColor := getSeverityColor(data.Severity)
-	fillRect(img, 0, 0, cardWidth, 6, severityColor)
+	fillRect(img, 0, 0, cardWidth, 8, severityColor)
 
-	// Severity badge (40,35 → 60,53)
+	// Severity badge (40,35 → 80,70)
 	badgeText := fmt.Sprintf("● %s ALERT", data.Severity)
-	drawText(img, 60, 53, badgeText, severityColor, false)
+	drawText(img, 80, 70, badgeText, severityColor, false)
 
-	// Symbol + Alert type (40,70 → 60,105)
+	// Symbol + Alert type (40,70 → 80,140)
 	symbolText := fmt.Sprintf("%s — %s", data.Symbol, data.AlertType)
-	drawText(img, 60, 105, symbolText, textPrimary, true)
+	drawText(img, 80, 140, symbolText, textPrimary, true)
 
-	// Divider line (40,90 → 60,135)
-	fillRect(img, 60, 135, cardWidth-60, 137, borderColor)
+	// Divider line (40,90 → 80,180)
+	fillRect(img, 80, 180, cardWidth-80, 182, borderColor)
 
-	// Left column — price data (scaled 1.5x)
-	drawText(img, 60, 188, "Current Price", textMuted, false)
-	drawText(img, 60, 222, formatPrice(data.Price), textPrimary, true)
+	// Left column — price data (scaled 2x from 800x420)
+	drawText(img, 80, 250, "Current Price", textMuted, false)
+	drawText(img, 80, 296, formatPrice(data.Price), textPrimary, true)
 
-	drawText(img, 60, 285, "Cluster Level", textMuted, false)
-	drawText(img, 60, 320, formatPrice(data.ClusterPrice), severityColor, true)
+	drawText(img, 80, 380, "Cluster Level", textMuted, false)
+	drawText(img, 80, 426, formatPrice(data.ClusterPrice), severityColor, true)
 
-	drawText(img, 60, 383, "Distance", textMuted, false)
-	drawText(img, 60, 417, fmt.Sprintf("%.2f%%", data.Distance*100), textPrimary, false)
+	drawText(img, 80, 510, "Distance", textMuted, false)
+	drawText(img, 80, 556, fmt.Sprintf("%.2f%%", data.Distance*100), textPrimary, false)
 
-	drawText(img, 60, 480, "Cluster Size", textMuted, false)
-	drawText(img, 60, 515, formatUSD(data.ClusterSize), textPrimary, false)
+	drawText(img, 80, 640, "Cluster Size", textMuted, false)
+	drawText(img, 80, 686, formatUSD(data.ClusterSize), textPrimary, false)
 
-	// Center divider (100→150, height-40→height-60)
-	fillRect(img, cardWidth/2-1, 150, cardWidth/2, cardHeight-60, borderColor)
+	// Center divider
+	fillRect(img, cardWidth/2-1, 200, cardWidth/2, cardHeight-80, borderColor)
 
 	// Right column — signal data
-	cx := cardWidth/2 + 60
+	cx := cardWidth/2 + 80
 
-	drawText(img, cx, 188, "Sweep Probability", textMuted, false)
+	drawText(img, cx, 250, "Sweep Probability", textMuted, false)
 	probColor := getProbColor(data.SweepProb)
-	drawText(img, cx, 222, fmt.Sprintf("%d%%", data.SweepProb), probColor, true)
+	drawText(img, cx, 296, fmt.Sprintf("%d%%", data.SweepProb), probColor, true)
 
-	// Probability bar (158→237, 300→450, 8→12)
-	drawProgressBar(img, cx, 237, 450, 12, data.SweepProb, 100, probColor)
+	// Probability bar
+	drawProgressBar(img, cx, 316, 600, 16, data.SweepProb, 100, probColor)
 
-	drawText(img, cx, 300, "Cascade Risk", textMuted, false)
+	drawText(img, cx, 400, "Cascade Risk", textMuted, false)
 	cascadeColor := getCascadeColor(data.CascadeLevel)
-	drawText(img, cx, 335, fmt.Sprintf("%s  %d/100", data.CascadeLevel, data.CascadeScore), cascadeColor, false)
+	drawText(img, cx, 446, fmt.Sprintf("%s  %d/100", data.CascadeLevel, data.CascadeScore), cascadeColor, false)
 
-	drawText(img, cx, 398, "Liquidity Gravity", textMuted, false)
+	drawText(img, cx, 530, "Liquidity Gravity", textMuted, false)
 	gravityText := fmt.Sprintf("%.1f%% %s", data.GravityPct, data.GravityDir)
-	drawText(img, cx, 432, gravityText, accentGreen, false)
+	drawText(img, cx, 576, gravityText, accentGreen, false)
 
-	drawText(img, cx, 495, "Funding", textMuted, false)
+	drawText(img, cx, 660, "Funding", textMuted, false)
 	fundingText := fmt.Sprintf("%.4f%%", data.Funding*100)
 	fundingColor := textPrimary
 	if data.Funding > 0.0003 {
@@ -141,19 +141,19 @@ func GenerateAlertCard(data AlertCardData) ([]byte, error) {
 	} else if data.Funding < -0.0003 {
 		fundingColor = accentGreen
 	}
-	drawText(img, cx, 530, fundingText, fundingColor, false)
+	drawText(img, cx, 706, fundingText, fundingColor, false)
 
-	// Bottom bar at cardHeight-60
-	fillRect(img, 0, cardHeight-60, cardWidth, cardHeight-59, borderColor)
+	// Bottom bar at cardHeight-80
+	fillRect(img, 0, cardHeight-80, cardWidth, cardHeight-79, borderColor)
 
 	// Left: "DerivLens" in green
-	drawText(img, 60, cardHeight-30, "DerivLens", accentGreen, false)
+	drawText(img, 80, cardHeight-40, "DerivLens", accentGreen, false)
 
 	// Center: tagline
-	drawText(img, cardWidth/2-150, cardHeight-30, "Crypto Derivatives Intelligence", textMuted, false)
+	drawText(img, cardWidth/2-200, cardHeight-40, "Crypto Derivatives Intelligence", textMuted, false)
 
 	// Right: URL
-	drawText(img, cardWidth-180, cardHeight-30, "derivlens.io", textMuted, false)
+	drawText(img, cardWidth-240, cardHeight-40, "derivlens.io", textMuted, false)
 
 	// Encode to PNG
 	var buf bytes.Buffer

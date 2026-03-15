@@ -426,6 +426,16 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 			continue
 		}
 
+		// Skip clusters at 0.00% distance
+		if magnet.Distance < 0.001 {
+			continue
+		}
+
+		// $200k minimum cluster size for heat feed
+		if magnet.SizeUSD < 200_000 {
+			continue
+		}
+
 		distance := magnet.Distance
 		if distance < 0.0001 {
 			distance = 0.0001
@@ -440,6 +450,7 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 			(float64(magnet.Probability) / 100) *
 			(gravityDom / 100)
 
+		// Minimum 70% probability for heat feed
 		if magnet.Probability < 70 {
 			continue
 		}
@@ -506,6 +517,26 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 		w.notifier.PostTopAlert(*top.Alert, top.Snap, top.Signals)
 	} else {
 		w.notifier.PostToChannel(message)
+	}
+
+	// Send heat feed to Pro and Basic subscribers
+	subscribers, err := w.db.GetActiveSubscribers(ctx)
+	if err == nil {
+		for _, sub := range subscribers {
+			if sub.ChatID == 0 {
+				continue
+			}
+			tier := sub.Tier
+			if tier == "" {
+				tier = "free"
+			}
+			if tier != "pro" && tier != "basic" {
+				continue
+			}
+			if err := w.notifier.SendMessage(ctx, sub.ChatID, message); err != nil {
+				log.Printf("[worker] heat feed send to @%s: %v", sub.TelegramUsername, err)
+			}
+		}
 	}
 
 	log.Printf("[worker] top target broadcast: top %d — %s score=%.0f prob=%d%%",
