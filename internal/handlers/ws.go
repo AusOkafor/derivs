@@ -54,11 +54,18 @@ func (hub *Hub) getOrFetch(ctx context.Context, symbol string) (models.SnapshotW
 
 	ai, _ := hub.handler.analyzer.Analyze(ctx, snap, sigs, "free", "", "") // WebSocket has no user context; use free tier
 
+	fg := hub.handler.calc.Calculate(snap)
+	if marketFG, err := hub.handler.calc.GetMarketIndex(); err == nil {
+		fg.MarketFearGreed = &models.MarketFearGreed{
+			Value: marketFG.Value,
+			Label: marketFG.Label,
+		}
+	}
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
 		Analysis:  ai,
 		Alerts:    hub.handler.detector.Analyze(snap, sigs),
-		FearGreed: hub.handler.calc.Calculate(snap),
+		FearGreed: fg,
 		Signals:   sigs,
 	}
 	hub.handler.cache.Set(symbol, result)

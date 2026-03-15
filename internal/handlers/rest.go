@@ -82,6 +82,15 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 					Window:        "5m",
 				}
 			}
+			// Attach market Fear & Greed if missing (e.g. from older cache)
+			if cached.FearGreed.MarketFearGreed == nil {
+				if marketFG, err := h.calc.GetMarketIndex(); err == nil {
+					cached.FearGreed.MarketFearGreed = &models.MarketFearGreed{
+						Value: marketFG.Value,
+						Label: marketFG.Label,
+					}
+				}
+			}
 			w.Header().Set("X-Cache", "HIT")
 			writeJSON(w, http.StatusOK, cached)
 			return
@@ -138,11 +147,19 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	fg := h.calc.Calculate(snap)
+	if marketFG, err := h.calc.GetMarketIndex(); err == nil {
+		fg.MarketFearGreed = &models.MarketFearGreed{
+			Value: marketFG.Value,
+			Label: marketFG.Label,
+		}
+	}
+
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
 		Analysis:  ai,
 		Alerts:    h.detector.Analyze(snap, sigs),
-		FearGreed: h.calc.Calculate(snap),
+		FearGreed: fg,
 		Signals:   sigs,
 	}
 
@@ -335,6 +352,12 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 			momentum := h.cache.GetPriceMomentum(symbol)
 			sigs := engine.Analyze(snap, momentum)
 			fg := h.calc.Calculate(snap)
+			if marketFG, err := h.calc.GetMarketIndex(); err == nil {
+				fg.MarketFearGreed = &models.MarketFearGreed{
+					Value: marketFG.Value,
+					Label: marketFG.Label,
+				}
+			}
 			// Populate cache so Size() reflects usage
 			h.cache.Set(symbol, models.SnapshotWithAnalysis{
 				Snapshot:  snap,

@@ -1,15 +1,80 @@
 package feargreed
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
+	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"derivs-backend/internal/models"
 )
 
-type Calculator struct{}
+type AlternativeFearGreed struct {
+	Value     int
+	Label     string
+	Timestamp string
+}
 
-func New() *Calculator { return &Calculator{} }
+func fetchAlternativeFearGreed() (*AlternativeFearGreed, error) {
+	resp, err := http.Get("https://api.alternative.me/fng/?limit=1")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			Value               string `json:"value"`
+			ValueClassification string `json:"value_classification"`
+			Timestamp           string `json:"timestamp"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	if len(result.Data) == 0 {
+		return nil, fmt.Errorf("no data")
+	}
+
+	val, _ := strconv.Atoi(result.Data[0].Value)
+	return &AlternativeFearGreed{
+		Value:     val,
+		Label:     result.Data[0].ValueClassification,
+		Timestamp: result.Data[0].Timestamp,
+	}, nil
+}
+
+type Calculator struct {
+	marketFGMu   sync.Mutex
+	marketFG     *AlternativeFearGreed
+	marketFGAt   time.Time
+	marketFGTTL  time.Duration
+}
+
+func New() *Calculator {
+	return &Calculator{marketFGTTL: time.Hour}
+}
+
+// GetMarketIndex returns the Alternative.me global Fear & Greed index (cached for 1 hour).
+func (c *Calculator) GetMarketIndex() (*AlternativeFearGreed, error) {
+	c.marketFGMu.Lock()
+	defer c.marketFGMu.Unlock()
+	if c.marketFG != nil && time.Since(c.marketFGAt) < c.marketFGTTL {
+		return c.marketFG, nil
+	}
+	fg, err := fetchAlternativeFearGreed()
+	if err != nil {
+		return nil, err
+	}
+	c.marketFG = fg
+	c.marketFGAt = time.Now()
+	return fg, nil
+}
 
 // Calculate derives a 0-100 Fear & Greed score from a MarketSnapshot.
 // Pure computation — no external calls.

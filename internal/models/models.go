@@ -93,11 +93,17 @@ type AlertHistoryEntry struct {
 	TriggeredAt time.Time `json:"triggered_at"`
 }
 
+type MarketFearGreed struct {
+	Value int    `json:"value"`
+	Label string `json:"label"`
+}
+
 type FearGreedScore struct {
-	Symbol     string    `json:"symbol"`
-	Score      int       `json:"score"` // 0-100
-	Label      string    `json:"label"` // "Extreme Fear" | "Fear" | "Neutral" | "Greed" | "Extreme Greed"
-	Components struct {
+	Symbol         string           `json:"symbol"`
+	Score          int              `json:"score"` // 0-100
+	Label          string           `json:"label"` // "Extreme Fear" | "Fear" | "Neutral" | "Greed" | "Extreme Greed"
+	MarketFearGreed *MarketFearGreed `json:"market_fear_greed,omitempty"`
+	Components     struct {
 		FundingScore     int `json:"funding_score"`
 		OIScore          int `json:"oi_score"`
 		LongShortScore   int `json:"long_short_score"`
