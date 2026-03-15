@@ -170,7 +170,13 @@ func (w *Worker) runCycleFree(ctx context.Context) {
 		return
 	}
 	defer w.freeRunning.Store(false)
-	w.runCycle(ctx, false) // freeCycle = not pro
+
+	log.Printf("[worker] free cycle starting")
+	// Timeout prevents runCycle from blocking forever and leaving freeRunning stuck
+	runCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	defer cancel()
+	n := w.runCycle(runCtx, false) // freeCycle = not pro
+	log.Printf("[worker] free cycle done, processed %d subscribers", n)
 }
 
 // runCyclePro runs for pro-tier subscribers only, 1-min interval, all symbols.
