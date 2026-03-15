@@ -163,6 +163,42 @@ func (t *TelegramNotifier) PostToChannel(message string) error {
 	return nil
 }
 
+// SendAlertCardToUser sends the visual card (same as PostTopAlert) to a specific user's chat.
+// Used for HIGH severity alerts to free and pro subscribers.
+func (t *TelegramNotifier) SendAlertCardToUser(ctx context.Context, chatID int64, alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) error {
+	if (alert.Severity == "high" || alert.Severity == "HIGH") && sigs.LiquidationMagnet != nil {
+		magnet := sigs.LiquidationMagnet
+		data := cards.AlertCardData{
+			Symbol:       alert.Symbol,
+			Severity:     "HIGH",
+			AlertType:    "Liquidity Sweep",
+			Price:        snap.LiquidationMap.CurrentPrice,
+			ClusterPrice: magnet.Price,
+			ClusterSize:  magnet.SizeUSD,
+			Distance:     magnet.Distance / 100,
+			SweepProb:    magnet.Probability,
+			CascadeLevel: sigs.CascadeRisk.Level,
+			CascadeScore: sigs.CascadeRisk.Score,
+			GravityDir:   sigs.LiquidityGravity.Dominant,
+			GravityPct:   math.Max(sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.DownwardPull),
+			Funding:      snap.FundingRate.Rate,
+			OIChange:     snap.OpenInterest.OIChange1h,
+		}
+		imgBytes, err := cards.GenerateAlertCard(data)
+		if err == nil {
+			firstLine := alert.Message
+			if idx := strings.Index(alert.Message, "\n"); idx > 0 {
+				firstLine = alert.Message[:idx]
+			}
+			caption := fmt.Sprintf("🔴 HIGH ALERT — %s\n%s\n\nFull dashboard → derivlens.io", alert.Symbol, firstLine)
+			return t.SendPhoto(strconv.FormatInt(chatID, 10), imgBytes, caption)
+		}
+	}
+	// Fallback to text
+	msg := fmt.Sprintf("🔴 HIGH ALERT — %s\n%s\n\nFull dashboard → derivlens.io", alert.Symbol, alert.Message)
+	return t.SendMessage(ctx, chatID, msg)
+}
+
 // PostTopAlert posts a HIGH severity alert to the public channel as a free preview.
 // When severity is HIGH and signals include a liquidation magnet, generates and sends a visual card.
 func (t *TelegramNotifier) PostTopAlert(alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) error {
