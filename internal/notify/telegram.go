@@ -191,14 +191,11 @@ func buildAlertCardData(alert models.Alert, snap models.MarketSnapshot, sigs mod
 func formatPriceForAlert(p float64) string {
 	if p >= 1000 {
 		return fmt.Sprintf("$%.2f", p)
-	}
-	if p >= 1 {
+	} else if p >= 1 {
 		return fmt.Sprintf("$%.3f", p)
-	}
-	if p >= 0.1 {
+	} else if p >= 0.1 {
 		return fmt.Sprintf("$%.4f", p)
-	}
-	if p >= 0.01 {
+	} else if p >= 0.01 {
 		return fmt.Sprintf("$%.5f", p)
 	}
 	return fmt.Sprintf("$%.6f", p)

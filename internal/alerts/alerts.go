@@ -291,6 +291,9 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		if distanceToZone < 0.001 {
 			continue
 		}
+		if zone.TotalUSD < 200_000 {
+			continue // skip zones smaller than $200k
+		}
 
 		severity := zoneSeverity(zone, distanceToZone)
 		if severity == "" {
@@ -420,7 +423,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		// Skip before creating alert: too close, or cluster too small
 		if m.Distance < 0.001 || m.SizeUSD < 200_000 {
 			// skip — price at cluster or cluster < $200k
-		} else if m.Distance >= 0.1 {
+		} else if m.Distance >= 0.001 {
 			magnetRound := 10.0
 			if m.Price < 100 {
 				magnetRound = 1.0
