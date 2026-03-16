@@ -171,6 +171,62 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// WaitlistRequest is the request body for POST /api/waitlist
+type WaitlistRequest struct {
+	Email    string `json:"email"`
+	Tier     string `json:"tier"`
+	Username string `json:"username"`
+}
+
+// JoinWaitlist handles POST /api/waitlist
+func (h *Handler) JoinWaitlist(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req WaitlistRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.Email == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email required"})
+		return
+	}
+	if req.Tier == "" {
+		req.Tier = "pro"
+	}
+
+	if err := h.db.AddToWaitlist(r.Context(), req.Email, req.Tier, req.Username); err != nil {
+		if strings.Contains(err.Error(), "duplicate") {
+			writeJSON(w, http.StatusOK, map[string]string{
+				"status":  "already_registered",
+				"message": "You're already on the waitlist!",
+			})
+			return
+		}
+		log.Printf("JoinWaitlist: AddToWaitlist: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to join waitlist"})
+		return
+	}
+
+	usernameDisplay := "(not provided)"
+	if req.Username != "" {
+		usernameDisplay = "@" + strings.TrimPrefix(req.Username, "@")
+	}
+	go func() {
+		_ = h.notifier.SendToAdmin(fmt.Sprintf(
+			"🎯 New Waitlist Signup!\n\nEmail: %s\nTier: %s\nUsername: %s",
+			req.Email, req.Tier, usernameDisplay,
+		))
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": "You're on the waitlist!",
+	})
+}
+
 // Health handles GET /api/health
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	exchangeStatus := map[string]string{

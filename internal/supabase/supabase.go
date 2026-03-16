@@ -588,6 +588,38 @@ func (c *Client) Ping() string {
 	return "ok"
 }
 
+// AddToWaitlist inserts a row into the waitlist table.
+// Returns error for duplicate email (409) or other failures.
+func (c *Client) AddToWaitlist(ctx context.Context, email, tier, username string) error {
+	payload := map[string]interface{}{
+		"email":    email,
+		"tier":     tier,
+		"username": username,
+	}
+	body, _ := json.Marshal(payload)
+	url := c.baseURL + "/rest/v1/waitlist"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 409 {
+		return fmt.Errorf("duplicate email")
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("supabase error: %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // setHeaders applies the standard Supabase auth headers to every request.
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("apikey", c.serviceKey)
