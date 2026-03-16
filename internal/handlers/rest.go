@@ -748,6 +748,99 @@ func (h *Handler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"checkout_url": url})
 }
 
+// LemonSqueezyCheckout handles GET /api/billing/lemonsqueezy/checkout?username=johndoe&tier=basic|pro
+// Creates Lemon Squeezy checkout, returns {"checkout_url": "https://..."}
+func (h *Handler) LemonSqueezyCheckout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	username := strings.TrimPrefix(strings.TrimSpace(r.URL.Query().Get("username")), "@")
+	tier := r.URL.Query().Get("tier")
+	if username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
+		return
+	}
+	if tier == "" {
+		tier = "pro"
+	}
+	if tier != "basic" && tier != "pro" {
+		tier = "pro"
+	}
+
+	if h.lemonSqueezy == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Lemon Squeezy not configured"})
+		return
+	}
+
+	url, err := h.lemonSqueezy.CreateCheckout(username, tier)
+	if err != nil {
+		log.Printf("billing: LemonSqueezy CreateCheckout: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"checkout_url": url})
+}
+
+// LemonSqueezyWebhook handles POST /api/billing/lemonsqueezy/webhook.
+func (h *Handler) LemonSqueezyWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.lemonSqueezy == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	payload, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("billing: Lemon Squeezy webhook read body: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	sigHeader := r.Header.Get("X-Signature")
+	if sigHeader == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	err = h.lemonSqueezy.HandleWebhook(payload, sigHeader, func(u billing.WebhookUpdate) {
+		switch u.EventType {
+		case "order_created", "subscription_created":
+			if u.TelegramUsername != "" {
+				if err := h.db.UpdateSubscriberTier(ctx, u.TelegramUsername, u.Tier, u.CustomerID, u.SubscriptionID, u.Status); err != nil {
+					sentry.CaptureException(err)
+					log.Printf("billing: Lemon Squeezy UpdateSubscriberTier(%s): %v", u.TelegramUsername, err)
+				}
+			}
+		case "subscription_updated":
+			if err := h.db.UpdateSubscriberTierByStripeID(ctx, u.CustomerID, u.SubscriptionID, "", u.Status); err != nil {
+				sentry.CaptureException(err)
+				log.Printf("billing: Lemon Squeezy UpdateSubscriberTierByStripeID: %v", err)
+			}
+		case "subscription_expired":
+			if err := h.db.UpdateSubscriberTierByStripeID(ctx, u.CustomerID, u.SubscriptionID, "free", u.Status); err != nil {
+				sentry.CaptureException(err)
+				log.Printf("billing: Lemon Squeezy UpdateSubscriberTierByStripeID: %v", err)
+			}
+		}
+	})
+
+	if err != nil {
+		log.Printf("billing: Lemon Squeezy webhook: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 // StripeWebhook handles POST /api/billing/webhook.
 // Stripe webhook handler — verifies signature, processes events, updates Supabase.
 func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {

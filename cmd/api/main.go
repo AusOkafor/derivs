@@ -66,7 +66,19 @@ func main() {
 		billingClient = billing.New(cfg.StripeSecretKey, cfg.StripeWebhookSecret)
 	}
 
-	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, cfg.AdminSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro, wrk, liqFeed)
+	var lsClient *billing.LemonSqueezyClient
+	if cfg.LemonSqueezyAPIKey != "" && cfg.LemonSqueezyStoreID != "" {
+		lsClient = billing.NewLemonSqueezyClient(
+			cfg.LemonSqueezyAPIKey,
+			cfg.LemonSqueezyWebhookSecret,
+			cfg.LemonSqueezyVariantBasic,
+			cfg.LemonSqueezyVariantPro,
+			cfg.LemonSqueezyStoreID,
+			"https://derivlens.io",
+		)
+	}
+
+	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, lsClient, cfg.AdminSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro, wrk, liqFeed)
 	hub := handlers.NewHub(h)
 
 	mux := http.NewServeMux()
@@ -82,6 +94,8 @@ func main() {
 	mux.HandleFunc("/api/billing/checkout", h.CreateCheckout)
 	mux.HandleFunc("/api/billing/portal", h.CreatePortal)
 	mux.HandleFunc("/api/billing/webhook", h.StripeWebhook)
+	mux.HandleFunc("/api/billing/lemonsqueezy/webhook", h.LemonSqueezyWebhook)
+	mux.HandleFunc("/api/billing/lemonsqueezy/checkout", h.LemonSqueezyCheckout)
 	mux.HandleFunc("/api/billing/status", h.GetBillingStatus)
 	mux.HandleFunc("/api/settings", h.Settings)
 	mux.HandleFunc("/api/webhook/telegram", h.TelegramWebhook)
