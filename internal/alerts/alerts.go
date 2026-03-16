@@ -287,8 +287,8 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			distanceToZone = 0
 		}
 
-		// Skip zones at current price — 0.1% minimum distance
-		if distanceToZone < 0.1 {
+		// Skip zones at current price — 0.001 (0.00%) minimum distance
+		if distanceToZone < 0.001 {
 			continue
 		}
 
@@ -417,9 +417,12 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
 	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
-		// Don't fire liquidation sweep alerts when distance < 0.1%
-		// This prevents "at current price" alerts that are too late
-		if m.Distance >= 0.1 {
+		// Skip — price already at cluster, too late
+		if m.Distance < 0.001 {
+			// skip
+		} else if m.SizeUSD < 200_000 {
+			// Skip entirely — too small
+		} else if m.Distance >= 0.1 {
 			magnetRound := 10.0
 			if m.Price < 100 {
 				magnetRound = 1.0
@@ -449,15 +452,19 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 					)
 				}
 
+				severity := "high"
+				if m.SizeUSD < 500_000 {
+					severity = "medium" // Downgrade HIGH to MEDIUM if cluster < $500k
+				}
 				a := models.Alert{
 					ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 					Symbol:    snap.Symbol,
 					Message:   message,
-					Severity:  "high",
+					Severity:  severity,
 					Timestamp: now,
 				}
 				out = append(out, a)
-				if OnHighAlert != nil {
+				if severity == "high" && OnHighAlert != nil {
 					OnHighAlert(a, snap, sigs)
 				}
 			}
