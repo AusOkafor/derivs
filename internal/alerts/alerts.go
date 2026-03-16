@@ -108,11 +108,15 @@ func aggregateLiquidationZones(levels []models.LiquidationLevel, currentPrice fl
 }
 
 const (
+	MinClusterSize = 200_000 // $200k minimum for ANY liquidation alert (zone, magnet, heat feed)
 	highSeverityMinSize = 500_000 // $500k minimum for HIGH
-	medSeverityMinSize  = 100_000 // $100k minimum for MEDIUM
+	medSeverityMinSize  = 100_000 // $100k minimum for MEDIUM (must be >= minClusterSize to fire)
 )
 
 func zoneSeverity(zone LiquidationZone, distance float64) string {
+	if zone.TotalUSD < MinClusterSize {
+		return ""
+	}
 	if zone.TotalUSD >= highSeverityMinSize && distance <= 1.5 {
 		return "high"
 	}
@@ -143,8 +147,12 @@ func formatPrice(p float64) string {
 		return fmt.Sprintf("$%.2f", p)
 	case p >= 1:
 		return fmt.Sprintf("$%.3f", p)
-	default:
+	case p >= 0.1:
 		return fmt.Sprintf("$%.4f", p)
+	case p >= 0.01:
+		return fmt.Sprintf("$%.5f", p)
+	default:
+		return fmt.Sprintf("$%.6f", p)
 	}
 }
 
@@ -287,11 +295,11 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			distanceToZone = 0
 		}
 
-		// Skip zones at current price — 0.001 (0.00%) minimum distance
-		if distanceToZone < 0.001 {
+		// Skip zones at current price — 0.1% minimum (distance already in %)
+		if distanceToZone < 0.1 {
 			continue
 		}
-		if zone.TotalUSD < 200_000 {
+		if zone.TotalUSD < MinClusterSize {
 			continue // skip zones smaller than $200k
 		}
 
@@ -335,7 +343,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 
 		distStr := fmt.Sprintf("%.2f%%", distanceToZone)
-		if distanceToZone < 0.01 {
+		if distanceToZone < 0.1 {
 			distStr = "at current price"
 		}
 
@@ -421,7 +429,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
 		// Skip before creating alert: too close, or cluster too small
-		if m.Distance < 0.001 || m.SizeUSD < 200_000 {
+		if m.Distance < 0.001 || m.SizeUSD < MinClusterSize {
 			// skip — price at cluster or cluster < $200k
 		} else if m.Distance >= 0.001 {
 			magnetRound := 10.0

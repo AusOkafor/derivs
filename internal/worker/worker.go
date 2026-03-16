@@ -414,20 +414,20 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 		}
 
 		sigs := engine.Analyze(snap, 0)
-		alerts := w.detector.Analyze(snap, sigs)
+		detectedAlerts := w.detector.Analyze(snap, sigs)
 
 		magnet := sigs.LiquidationMagnet
 		if magnet == nil {
 			continue
 		}
 
-		// Skip clusters at 0.00% distance
+		// Skip clusters at 0.00% distance (0.001 = 0.001% minimum, filters "at current price")
 		if magnet.Distance < 0.001 {
 			continue
 		}
 
-		// $200k minimum cluster size for heat feed
-		if magnet.SizeUSD < 200_000 {
+		// $200k minimum cluster size for heat feed (must match alerts.MinClusterSize)
+		if magnet.SizeUSD < alerts.MinClusterSize {
 			continue
 		}
 
@@ -451,9 +451,9 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 		}
 
 		var bestAlert *models.Alert
-		for i := range alerts {
-			if alerts[i].Severity == "high" {
-				bestAlert = &alerts[i]
+		for i := range detectedAlerts {
+			if detectedAlerts[i].Severity == "high" {
+				bestAlert = &detectedAlerts[i]
 				break
 			}
 		}
