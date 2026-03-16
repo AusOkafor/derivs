@@ -421,8 +421,8 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 			continue
 		}
 
-		// Skip clusters at 0.00% distance (0.001 = 0.001% minimum, filters "at current price")
-		if magnet.Distance < 0.001 {
+		// Skip clusters below 0.1% distance (magnet.Distance is in %)
+		if magnet.Distance < 0.1 {
 			continue
 		}
 

@@ -164,20 +164,37 @@ func (t *TelegramNotifier) PostToChannel(message string) error {
 }
 
 // buildAlertCardData constructs AlertCardData from alert, snap, and signals.
+// Uses alert's ClusterPrice, ClusterSize, Distance when populated; falls back to magnet.
 func buildAlertCardData(alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) *cards.AlertCardData {
-	if sigs.LiquidationMagnet == nil {
+	clusterPrice := alert.ClusterPrice
+	clusterSize := alert.ClusterSize
+	distance := alert.Distance
+	sweepProb := alert.Probability
+
+	if clusterSize == 0 && sigs.LiquidationMagnet != nil {
+		magnet := sigs.LiquidationMagnet
+		clusterPrice = magnet.Price
+		clusterSize = magnet.SizeUSD
+		distance = magnet.Distance / 100
+		sweepProb = magnet.Probability
+	}
+	if clusterSize == 0 {
 		return nil
 	}
-	magnet := sigs.LiquidationMagnet
+
+	sev := "HIGH"
+	if alert.Severity == "medium" {
+		sev = "MEDIUM"
+	}
 	return &cards.AlertCardData{
 		Symbol:       alert.Symbol,
-		Severity:     "HIGH",
+		Severity:     sev,
 		AlertType:    "Liquidity Sweep",
 		Price:        snap.LiquidationMap.CurrentPrice,
-		ClusterPrice: magnet.Price,
-		ClusterSize:  magnet.SizeUSD,
-		Distance:     magnet.Distance / 100,
-		SweepProb:    magnet.Probability,
+		ClusterPrice: clusterPrice,
+		ClusterSize:  clusterSize,
+		Distance:     distance,
+		SweepProb:    sweepProb,
 		CascadeLevel: sigs.CascadeRisk.Level,
 		CascadeScore: sigs.CascadeRisk.Score,
 		GravityDir:   sigs.LiquidityGravity.Dominant,

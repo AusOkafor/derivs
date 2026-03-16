@@ -363,12 +363,20 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			whaleTag,
 		)
 
+		sweepProb := 0
+		if sigs.LiquidationMagnet != nil {
+			sweepProb = sigs.LiquidationMagnet.Probability
+		}
 		a := models.Alert{
-			ID:        zoneID,
-			Symbol:    symbol,
-			Message:   message,
-			Severity:  severity,
-			Timestamp: now,
+			ID:           zoneID,
+			Symbol:       symbol,
+			Message:      message,
+			Severity:     severity,
+			Timestamp:    now,
+			ClusterPrice: (zone.MinPrice + zone.MaxPrice) / 2,
+			ClusterSize:  zone.TotalUSD,
+			Distance:     distanceToZone / 100,
+			Probability:  sweepProb,
 		}
 		out = append(out, a)
 		if severity == "high" && OnHighAlert != nil {
@@ -466,11 +474,15 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 					severity = "medium" // Downgrade HIGH to MEDIUM if cluster < $500k
 				}
 				a := models.Alert{
-					ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
-					Symbol:    snap.Symbol,
-					Message:   message,
-					Severity:  severity,
-					Timestamp: now,
+					ID:           fmt.Sprintf("%s-%s", snap.Symbol, id),
+					Symbol:       snap.Symbol,
+					Message:      message,
+					Severity:     severity,
+					Timestamp:    now,
+					ClusterPrice: m.Price,
+					ClusterSize:  m.SizeUSD,
+					Distance:     m.Distance / 100,
+					Probability:  m.Probability,
 				}
 				out = append(out, a)
 				if severity == "high" && OnHighAlert != nil {
