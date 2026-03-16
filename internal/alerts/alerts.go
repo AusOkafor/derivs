@@ -417,11 +417,9 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
 	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
-		// Skip — price already at cluster, too late
-		if m.Distance < 0.001 {
-			// skip
-		} else if m.SizeUSD < 200_000 {
-			// Skip entirely — too small
+		// Skip before creating alert: too close, or cluster too small
+		if m.Distance < 0.001 || m.SizeUSD < 200_000 {
+			// skip — price at cluster or cluster < $200k
 		} else if m.Distance >= 0.1 {
 			magnetRound := 10.0
 			if m.Price < 100 {

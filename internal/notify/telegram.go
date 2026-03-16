@@ -195,7 +195,13 @@ func formatPriceForAlert(p float64) string {
 	if p >= 1 {
 		return fmt.Sprintf("$%.3f", p)
 	}
-	return fmt.Sprintf("$%.4f", p)
+	if p >= 0.1 {
+		return fmt.Sprintf("$%.4f", p)
+	}
+	if p >= 0.01 {
+		return fmt.Sprintf("$%.5f", p)
+	}
+	return fmt.Sprintf("$%.6f", p)
 }
 
 // formatUSDForAlert formats USD for Telegram message.
