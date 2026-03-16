@@ -24,6 +24,7 @@ type Handler struct {
 	db                 *supabase.Client
 	notifier           *notify.TelegramNotifier
 	billing            *billing.StripeClient
+	lemonSqueezy       *billing.LemonSqueezyClient
 	adminSecret        string
 	stripePriceIDBasic string
 	stripePriceIDPro   string
@@ -41,6 +42,7 @@ func New(
 	db *supabase.Client,
 	notifier *notify.TelegramNotifier,
 	billingClient *billing.StripeClient,
+	lemonSqueezyClient *billing.LemonSqueezyClient,
 	adminSecret string,
 	stripePriceIDBasic, stripePriceIDPro string,
 	wrk *worker.Worker,
@@ -55,6 +57,7 @@ func New(
 		db:                 db,
 		notifier:           notifier,
 		billing:            billingClient,
+		lemonSqueezy:       lemonSqueezyClient,
 		adminSecret:        adminSecret,
 		stripePriceIDBasic: stripePriceIDBasic,
 		stripePriceIDPro:   stripePriceIDPro,

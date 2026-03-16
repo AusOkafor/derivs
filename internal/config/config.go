@@ -14,18 +14,23 @@ var DefaultSymbols = []string{
 }
 
 type Config struct {
-	Port                 string
-	AnthropicAPIKey      string
-	AllowedOrigins       string
-	CacheTTLSeconds      int
-	TelegramBotToken     string
-	SupabaseURL          string
-	SupabaseServiceKey   string
-	StripeSecretKey      string
-	StripeWebhookSecret  string
-	StripePriceIDBasic   string
-	StripePriceIDPro     string
-	AdminSecret          string
+	Port                    string
+	AnthropicAPIKey         string
+	AllowedOrigins          string
+	CacheTTLSeconds         int
+	TelegramBotToken        string
+	SupabaseURL             string
+	SupabaseServiceKey      string
+	StripeSecretKey         string
+	StripeWebhookSecret     string
+	StripePriceIDBasic      string
+	StripePriceIDPro        string
+	LemonSqueezyAPIKey      string
+	LemonSqueezyWebhookSecret string
+	LemonSqueezyVariantBasic  string
+	LemonSqueezyVariantPro    string
+	LemonSqueezyStoreID       string
+	AdminSecret             string
 }
 
 func Load() *Config {
@@ -37,11 +42,16 @@ func Load() *Config {
 		TelegramBotToken:   os.Getenv("TELEGRAM_BOT_TOKEN"),
 		SupabaseURL:        os.Getenv("SUPABASE_URL"),
 		SupabaseServiceKey: os.Getenv("SUPABASE_SERVICE_KEY"),
-		StripeSecretKey:    os.Getenv("STRIPE_SECRET_KEY"),
-		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
-		StripePriceIDBasic: os.Getenv("STRIPE_PRICE_ID_BASIC"),
-		StripePriceIDPro:   os.Getenv("STRIPE_PRICE_ID_PRO"),
-		AdminSecret:       os.Getenv("ADMIN_SECRET"),
+		StripeSecretKey:             os.Getenv("STRIPE_SECRET_KEY"),
+		StripeWebhookSecret:          os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		StripePriceIDBasic:           os.Getenv("STRIPE_PRICE_ID_BASIC"),
+		StripePriceIDPro:             os.Getenv("STRIPE_PRICE_ID_PRO"),
+		LemonSqueezyAPIKey:           os.Getenv("LEMONSQUEEZY_API_KEY"),
+		LemonSqueezyWebhookSecret:    os.Getenv("LEMONSQUEEZY_WEBHOOK_SECRET"),
+		LemonSqueezyVariantBasic:    os.Getenv("LEMONSQUEEZY_VARIANT_BASIC"),
+		LemonSqueezyVariantPro:      os.Getenv("LEMONSQUEEZY_VARIANT_PRO"),
+		LemonSqueezyStoreID:         os.Getenv("LEMONSQUEEZY_STORE_ID"),
+		AdminSecret:                 os.Getenv("ADMIN_SECRET"),
 	}
 
 	required := map[string]string{
