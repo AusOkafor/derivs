@@ -191,14 +191,16 @@ func buildAlertCardData(alert models.Alert, snap models.MarketSnapshot, sigs mod
 func formatPriceForAlert(p float64) string {
 	if p >= 1000 {
 		return fmt.Sprintf("$%.2f", p)
-	} else if p >= 1 {
+	} else if p >= 100 {
 		return fmt.Sprintf("$%.3f", p)
-	} else if p >= 0.1 {
+	} else if p >= 1 {
 		return fmt.Sprintf("$%.4f", p)
+	} else if p >= 0.1 {
+		return fmt.Sprintf("$%.5f", p) // was 4, now 5
 	} else if p >= 0.01 {
-		return fmt.Sprintf("$%.5f", p)
+		return fmt.Sprintf("$%.6f", p) // was 5, now 6
 	}
-	return fmt.Sprintf("$%.6f", p)
+	return fmt.Sprintf("$%.8f", p)
 }
 
 // formatUSDForAlert formats USD for Telegram message.
