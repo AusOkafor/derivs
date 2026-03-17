@@ -56,13 +56,19 @@ func New(
 	calc *feargreed.Calculator,
 ) *Worker {
 	return &Worker{
-		aggregator:  agg,
-		detector:   det,
+		aggregator:   agg,
+		detector:    det,
 		alertEngine: alerts.NewEngine(),
-		notifier:   not,
-		db:         db,
-		calc:       calc,
+		notifier:    not,
+		db:          db,
+		calc:        calc,
 	}
+}
+
+// ProcessAlerts runs alerts through the engine (validate, cooldown, downgrade).
+// Used by OnHighAlert callback and broadcastTopTarget to ensure engine is applied.
+func (w *Worker) ProcessAlerts(alerts []models.Alert) []models.Alert {
+	return w.alertEngine.Process(alerts)
 }
 
 // scheduleDaily runs fn at target hour:minute UTC, then every 24h.
@@ -513,7 +519,12 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 	top := candidates[0]
 	magnet := top.Signals.LiquidationMagnet
 	if magnet.Probability >= 80 && top.Alert != nil {
-		w.notifier.PostTopAlert(*top.Alert, top.Snap, top.Signals)
+		processed := w.ProcessAlerts([]models.Alert{*top.Alert})
+		if len(processed) > 0 {
+			w.notifier.PostTopAlert(*top.Alert, top.Snap, top.Signals)
+		} else {
+			w.notifier.PostToChannel(message)
+		}
 	} else {
 		w.notifier.PostToChannel(message)
 	}

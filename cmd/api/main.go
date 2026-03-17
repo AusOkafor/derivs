@@ -46,13 +46,17 @@ func main() {
 	calc := feargreed.New()
 
 	tg := notify.NewTelegram(cfg.TelegramBotToken)
+	sb := supabase.New(cfg.SupabaseURL, cfg.SupabaseServiceKey)
+	wrk := worker.New(agg, detector, tg, sb, calc)
 	alerts.SetOnHighAlert(func(a models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) {
+		processed := wrk.ProcessAlerts([]models.Alert{a})
+		if len(processed) == 0 {
+			return // blocked by engine (validation or cooldown)
+		}
 		if err := tg.PostTopAlert(a, snap, sigs); err != nil {
 			log.Printf("alerts: PostTopAlert: %v", err)
 		}
 	})
-	sb := supabase.New(cfg.SupabaseURL, cfg.SupabaseServiceKey)
-	wrk := worker.New(agg, detector, tg, sb, calc)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

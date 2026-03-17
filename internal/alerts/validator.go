@@ -17,8 +17,9 @@ func ValidateAlert(alert models.Alert) error {
 		return fmt.Errorf("cluster $%.0f below $200k minimum", alert.ClusterSize)
 	}
 
-	// Distance check — Distance stored as decimal (0.01 = 1%)
-	if alert.Distance > 0 && alert.Distance < MinDistancePct {
+	// Distance check — block when distance < 0.1% (including 0.00%)
+	// Cluster-based alerts (ClusterSize > 0) must have meaningful distance
+	if alert.ClusterSize > 0 && alert.Distance < MinDistancePct {
 		return fmt.Errorf("distance %.3f%% below 0.1%% minimum", alert.Distance*100)
 	}
 
