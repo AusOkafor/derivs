@@ -46,7 +46,11 @@ func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 		}
 
 		// Step 3 — Downgrade HIGH to MEDIUM if cluster < $500k
+		log.Printf("[engine] before downgrade: %s severity=%s cluster=%.0f",
+			alert.ID, alert.Severity, alert.ClusterSize)
 		if alert.Severity == "high" && alert.ClusterSize > 0 && alert.ClusterSize < highSeverityMinSize {
+			log.Printf("[engine] downgrading %s from high to medium: cluster $%.0f < $500k",
+				alert.ID, alert.ClusterSize)
 			alert.Severity = "medium"
 		}
 

@@ -345,9 +345,6 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			Timestamp: now,
 		}
 		out = append(out, a)
-		if OnHighAlert != nil {
-			OnHighAlert(a, snap, sigs)
-		}
 	}
 
 	// ── Rule 10: Long squeeze probability high ──────────────────────────────────
