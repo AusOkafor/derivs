@@ -54,8 +54,12 @@ func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 			alert.Severity = "medium"
 		}
 
-		log.Printf("[alerts] ALLOWED %s %s: cluster $%.0f dist %.2f%%",
-			alert.Severity, alert.ID, alert.ClusterSize, alert.Distance*100)
+		if alert.ClusterSize == 0 {
+			log.Printf("[alerts] ALLOWED %s %s (regime/OI alert)", alert.Severity, alert.ID)
+		} else {
+			log.Printf("[alerts] ALLOWED %s %s: cluster $%.0f dist %.2f%%",
+				alert.Severity, alert.ID, alert.ClusterSize, alert.Distance*100)
+		}
 		valid = append(valid, alert)
 	}
 
