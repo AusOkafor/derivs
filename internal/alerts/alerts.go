@@ -375,41 +375,45 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
 	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
-		magnetRound := 10.0
-		if m.Price < 100 {
-			magnetRound = 1.0
-		} else if m.Price < 1000 {
-			magnetRound = 5.0
-		}
-		roundedMagnetPrice := math.Round(m.Price/magnetRound) * magnetRound
-		id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
-
-		severity := "high"
-		if m.SizeUSD < 500_000 {
-			severity = "medium"
-		}
-		var message string
-		if m.Side == "short" {
-			message = fmt.Sprintf("Short liquidity above price — upward sweep likely\n\nCluster: %s | Distance: %.2f%% | Probability: %d%%",
-				formatUSD(m.SizeUSD), m.Distance, m.Probability)
+		if m.SizeUSD < MinClusterSize || m.Distance < 0.1 {
+			// Skip — cluster below $200k or distance below 0.1%
 		} else {
-			message = fmt.Sprintf("Long liquidity below price — downward sweep likely\n\nCluster: %s | Distance: %.2f%% | Probability: %d%%",
-				formatUSD(m.SizeUSD), m.Distance, m.Probability)
-		}
-		a := models.Alert{
-			ID:           fmt.Sprintf("%s-%s", snap.Symbol, id),
-			Symbol:       snap.Symbol,
-			Message:      message,
-			Severity:     severity,
-			Timestamp:    now,
-			ClusterPrice: m.Price,
-			ClusterSize:  m.SizeUSD,
-			Distance:     m.Distance / 100,
-			Probability:  m.Probability,
-		}
-		out = append(out, a)
-		if severity == "high" && OnHighAlert != nil {
-			OnHighAlert(a, snap, sigs)
+			magnetRound := 10.0
+			if m.Price < 100 {
+				magnetRound = 1.0
+			} else if m.Price < 1000 {
+				magnetRound = 5.0
+			}
+			roundedMagnetPrice := math.Round(m.Price/magnetRound) * magnetRound
+			id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
+
+			severity := "high"
+			if m.SizeUSD < 500_000 {
+				severity = "medium"
+			}
+			var message string
+			if m.Side == "short" {
+				message = fmt.Sprintf("Short liquidity above price — upward sweep likely\n\nCluster: %s | Distance: %.2f%% | Probability: %d%%",
+					formatUSD(m.SizeUSD), m.Distance, m.Probability)
+			} else {
+				message = fmt.Sprintf("Long liquidity below price — downward sweep likely\n\nCluster: %s | Distance: %.2f%% | Probability: %d%%",
+					formatUSD(m.SizeUSD), m.Distance, m.Probability)
+			}
+			a := models.Alert{
+				ID:           fmt.Sprintf("%s-%s", snap.Symbol, id),
+				Symbol:       snap.Symbol,
+				Message:      message,
+				Severity:     severity,
+				Timestamp:    now,
+				ClusterPrice: m.Price,
+				ClusterSize:  m.SizeUSD,
+				Distance:     m.Distance / 100,
+				Probability:  m.Probability,
+			}
+			out = append(out, a)
+			if severity == "high" && OnHighAlert != nil {
+				OnHighAlert(a, snap, sigs)
+			}
 		}
 	}
 

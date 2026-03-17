@@ -155,10 +155,11 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	rawAlerts := h.detector.Analyze(snap, sigs)
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
 		Analysis:  ai,
-		Alerts:    h.detector.Analyze(snap, sigs),
+		Alerts:    h.worker.ProcessAlerts(rawAlerts),
 		FearGreed: fg,
 		Signals:   sigs,
 	}
@@ -355,7 +356,8 @@ func (h *Handler) GetAlerts(w http.ResponseWriter, r *http.Request) {
 	engine := signals.New()
 	momentum := h.cache.GetPriceMomentum(symbol)
 	sigs := engine.Analyze(snap, momentum)
-	writeJSON(w, http.StatusOK, h.detector.Analyze(snap, sigs))
+	rawAlerts := h.detector.Analyze(snap, sigs)
+	writeJSON(w, http.StatusOK, h.worker.ProcessAlerts(rawAlerts))
 }
 
 // GetTickers handles GET /api/tickers?symbols=BTC,ETH,SOL,ARB,DOGE,AVAX
@@ -415,10 +417,11 @@ func (h *Handler) GetTickers(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			// Populate cache so Size() reflects usage
+			rawAlerts := h.detector.Analyze(snap, sigs)
 			h.cache.Set(symbol, models.SnapshotWithAnalysis{
 				Snapshot:  snap,
 				Analysis:  models.AIAnalysis{},
-				Alerts:    h.detector.Analyze(snap, sigs),
+				Alerts:    h.worker.ProcessAlerts(rawAlerts),
 				FearGreed: fg,
 				Signals:   sigs,
 			})

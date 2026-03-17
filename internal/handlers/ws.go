@@ -61,10 +61,11 @@ func (hub *Hub) getOrFetch(ctx context.Context, symbol string) (models.SnapshotW
 			Label: marketFG.Label,
 		}
 	}
+	rawAlerts := hub.handler.detector.Analyze(snap, sigs)
 	result := models.SnapshotWithAnalysis{
 		Snapshot:  snap,
 		Analysis:  ai,
-		Alerts:    hub.handler.detector.Analyze(snap, sigs),
+		Alerts:    hub.handler.worker.ProcessAlerts(rawAlerts),
 		FearGreed: fg,
 		Signals:   sigs,
 	}
