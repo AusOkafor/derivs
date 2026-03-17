@@ -393,6 +393,11 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 				continue
 			}
 
+			if !alerts.IsSafeToSend(ca.alert) {
+				log.Printf("[guard] BLOCKED before send: %s cluster=%.0f dist=%.4f", ca.alert.Symbol, ca.alert.ClusterSize, ca.alert.Distance)
+				continue
+			}
+
 			// Use formatted alert for all alerts (Pro and Free)
 			if err := w.notifier.SendAlertCardToUser(ctx, sub.ChatID, ca.alert, ca.snap, ca.sigs); err != nil {
 				log.Printf("worker: SendAlertCardToUser(chat=%d): %v", sub.ChatID, err)
@@ -449,34 +454,23 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 		var bestScore float64
 		var bestTC *TargetCandidate
 		for _, alert := range sa.detected {
-			if alert.ClusterSize < 200_000 || alert.ClusterSize == 0 {
+			if !alerts.IsSafeToSend(alert) {
 				continue
 			}
-			effectiveDistance := math.Max(alert.Distance, 0.001)
-			prob := float64(alert.Probability) / 100
-			if prob <= 0 && sa.sigs.LiquidationMagnet != nil {
-				prob = float64(sa.sigs.LiquidationMagnet.Probability) / 100
+			effectiveDistance := alert.Distance
+			if effectiveDistance < 0.001 {
+				effectiveDistance = 0.001 // clamp — prevents score explosion
 			}
-			if prob < 0.7 {
-				continue
-			}
-			gravityDom := math.Max(sa.sigs.LiquidityGravity.UpwardPull, sa.sigs.LiquidityGravity.DownwardPull) / 100
-			score := (alert.ClusterSize / effectiveDistance) * prob * gravityDom
+			score := alert.ClusterSize / effectiveDistance
 			if score > bestScore {
 				bestScore = score
-				var bestAlert *models.Alert
-				for i := range sa.detected {
-					if sa.detected[i].Severity == "high" && sa.detected[i].ClusterSize >= 200_000 {
-						bestAlert = &sa.detected[i]
-						break
-					}
-				}
+				alertCopy := alert
 				bestTC = &TargetCandidate{
 					Symbol:  sym,
-					Score:   score,
-					Snap:    sa.snap,
+					Score:  score,
+					Snap:   sa.snap,
 					Signals: sa.sigs,
-					Alert:   bestAlert,
+					Alert:  &alertCopy,
 				}
 			}
 		}
@@ -530,7 +524,7 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 	}
 
 	magnet := top.Signals.LiquidationMagnet
-	if magnet.Probability >= 80 && top.Alert != nil {
+	if magnet.Probability >= 80 && top.Alert != nil && alerts.IsSafeToSend(*top.Alert) {
 		processed := w.ProcessAlerts([]models.Alert{*top.Alert})
 		if len(processed) > 0 {
 			w.notifier.PostTopAlert(*top.Alert, top.Snap, top.Signals)
@@ -538,6 +532,9 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 			w.notifier.PostToChannel(message)
 		}
 	} else {
+		if top.Alert != nil && !alerts.IsSafeToSend(*top.Alert) {
+			log.Printf("[guard] BLOCKED heat feed PostTopAlert: %s cluster=%.0f dist=%.4f", top.Alert.Symbol, top.Alert.ClusterSize, top.Alert.Distance)
+		}
 		w.notifier.PostToChannel(message)
 	}
 
