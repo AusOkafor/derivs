@@ -37,12 +37,13 @@ var numericSuffix = regexp.MustCompile(`^\d+$`)
 // Worker runs a background ticker that fetches market data, detects anomalies,
 // and dispatches Telegram notifications to active subscribers.
 type Worker struct {
-	aggregator *aggregator.Aggregator
-	detector   *alerts.Detector
-	notifier   *notify.TelegramNotifier
-	db         *supabase.Client
-	calc       *feargreed.Calculator
-	running    atomic.Bool
+	aggregator  *aggregator.Aggregator
+	detector    *alerts.Detector
+	alertEngine *alerts.Engine
+	notifier    *notify.TelegramNotifier
+	db          *supabase.Client
+	calc        *feargreed.Calculator
+	running     atomic.Bool
 	freeRunning atomic.Bool
 	proRunning  atomic.Bool
 }
@@ -55,8 +56,9 @@ func New(
 	calc *feargreed.Calculator,
 ) *Worker {
 	return &Worker{
-		aggregator: agg,
+		aggregator:  agg,
 		detector:   det,
+		alertEngine: alerts.NewEngine(),
 		notifier:   not,
 		db:         db,
 		calc:       calc,
@@ -258,15 +260,16 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 			continue
 		}
 		sigs := engine.Analyze(snap, 0)
-		alerts := w.detector.Analyze(snap, sigs)
-		snapshots[sym] = symbolAlerts{detected: alerts, snap: snap, sigs: sigs}
+		rawAlerts := w.detector.Analyze(snap, sigs)
+		processedAlerts := w.alertEngine.Process(rawAlerts)
+		snapshots[sym] = symbolAlerts{detected: processedAlerts, snap: snap, sigs: sigs}
 		if proOnly {
-			log.Printf("worker: pro cycle found %d alerts for %s", len(alerts), sym)
+			log.Printf("worker: pro cycle found %d alerts for %s (raw: %d)", len(processedAlerts), sym, len(rawAlerts))
 		} else {
-			log.Printf("[worker] free cycle found %d alerts for %s", len(alerts), sym)
+			log.Printf("[worker] free cycle found %d alerts for %s (raw: %d)", len(processedAlerts), sym, len(rawAlerts))
 		}
-		// Log every alert that fires to alert_history (regardless of subscriber dedup)
-		for _, alert := range alerts {
+		// Log every processed alert to alert_history
+		for _, alert := range processedAlerts {
 			if err := w.db.LogAlertHistory(ctx, sym, alert.ID, alert.Message, alert.Severity); err != nil {
 				log.Printf("worker: LogAlertHistory(%s): %v", sym, err)
 			}
@@ -414,7 +417,8 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 		}
 
 		sigs := engine.Analyze(snap, 0)
-		alerts := w.detector.Analyze(snap, sigs)
+		rawAlerts := w.detector.Analyze(snap, sigs)
+		detectedAlerts := w.alertEngine.Process(rawAlerts)
 
 		magnet := sigs.LiquidationMagnet
 		if magnet == nil {
@@ -426,8 +430,8 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 			continue
 		}
 
-		// $200k minimum cluster size for heat feed
-		if magnet.SizeUSD < 200_000 {
+		// $200k minimum cluster size for heat feed (must match alerts.MinClusterSize)
+		if magnet.SizeUSD < alerts.MinClusterSize {
 			continue
 		}
 
@@ -451,9 +455,9 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 		}
 
 		var bestAlert *models.Alert
-		for i := range alerts {
-			if alerts[i].Severity == "high" {
-				bestAlert = &alerts[i]
+		for i := range detectedAlerts {
+			if detectedAlerts[i].Severity == "high" {
+				bestAlert = &detectedAlerts[i]
 				break
 			}
 		}

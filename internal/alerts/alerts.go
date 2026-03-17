@@ -5,15 +5,9 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"derivs-backend/internal/models"
-)
-
-var (
-	ruleCooldown   = map[string]time.Time{} // key: "{symbol}-{ruleID}"
-	ruleCooldownMu sync.Mutex
 )
 
 // OnHighAlert is called when a HIGH severity alert fires. Set via SetOnHighAlert.
@@ -22,18 +16,6 @@ var OnHighAlert func(alert models.Alert, snap models.MarketSnapshot, sigs models
 // SetOnHighAlert sets the callback invoked when a HIGH severity alert fires.
 func SetOnHighAlert(fn func(alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals)) {
 	OnHighAlert = fn
-}
-
-func checkAndSetCooldown(symbol, ruleID string, duration time.Duration) bool {
-	key := symbol + "-" + ruleID
-	ruleCooldownMu.Lock()
-	defer ruleCooldownMu.Unlock()
-	last, exists := ruleCooldown[key]
-	if exists && time.Since(last) < duration {
-		return true // on cooldown, skip
-	}
-	ruleCooldown[key] = time.Now()
-	return false
 }
 
 type Detector struct{}
@@ -108,11 +90,15 @@ func aggregateLiquidationZones(levels []models.LiquidationLevel, currentPrice fl
 }
 
 const (
-	highSeverityMinSize = 500_000 // $500k minimum for HIGH
-	medSeverityMinSize  = 100_000 // $100k minimum for MEDIUM
+	MinClusterSize      = 200_000  // $200k minimum for ANY liquidation alert (zone, magnet, heat feed)
+	highSeverityMinSize = 500_000  // $500k minimum for HIGH
+	medSeverityMinSize  = 100_000  // $100k minimum for MEDIUM (must be >= minClusterSize to fire)
 )
 
 func zoneSeverity(zone LiquidationZone, distance float64) string {
+	if zone.TotalUSD < MinClusterSize {
+		return ""
+	}
 	if zone.TotalUSD >= highSeverityMinSize && distance <= 1.5 {
 		return "high"
 	}
@@ -130,7 +116,7 @@ func formatUSD(usd float64) string {
 		return fmt.Sprintf("$%.2fM", usd/1_000_000)
 	}
 	if usd >= 1_000 {
-		return fmt.Sprintf("$%.2fk", usd/1_000)
+		return fmt.Sprintf("$%.0fk", usd/1_000)
 	}
 	return fmt.Sprintf("$%.0f", usd)
 }
@@ -143,25 +129,26 @@ func formatPrice(p float64) string {
 		return fmt.Sprintf("$%.2f", p)
 	case p >= 1:
 		return fmt.Sprintf("$%.3f", p)
-	default:
+	case p >= 0.1:
 		return fmt.Sprintf("$%.4f", p)
+	case p >= 0.01:
+		return fmt.Sprintf("$%.5f", p)
+	default:
+		return fmt.Sprintf("$%.6f", p)
 	}
 }
 
 func New() *Detector { return &Detector{} }
 
-// Analyze runs all detection rules against the snapshot and signals, and returns any
+// Analyze runs all detection rules against the snapshot and signals, and returns raw
 // triggered alerts. Returns an empty (non-nil) slice if nothing fires.
+// Filtering (cooldown, size/distance) is done by Engine.Process().
 func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals) []models.Alert {
 	var out []models.Alert
 	now := time.Now().UTC()
 
 	symbol := snap.Symbol
 	add := func(id, msg, severity string) {
-		// Global HIGH alert cooldown per symbol — max 1 HIGH per 15 min regardless of rule type
-		if severity == "high" && checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
-			return // skip — already sent HIGH alert for this symbol recently
-		}
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:    snap.Symbol,
@@ -177,71 +164,57 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 
 	// ── Rule 0: Liquidation burst (real-time from Binance) ─────────────────────
 	if snap.RecentLiquidations != nil && snap.RecentLiquidations.BurstDetected {
-		if !checkAndSetCooldown(symbol, "liq-burst", 2*time.Minute) {
-			add("liq-burst",
-				fmt.Sprintf("🚨 Liquidation burst detected — $%.1fM liquidated in 30 seconds\nCascade may be underway",
-					snap.RecentLiquidations.BurstSizeUSD/1_000_000),
-				"high",
-			)
-		}
+		add("liq-burst",
+			fmt.Sprintf("🚨 Liquidation burst detected — $%.1fM liquidated in 30 seconds\nCascade may be underway",
+				snap.RecentLiquidations.BurstSizeUSD/1_000_000),
+			"high",
+		)
 	}
 
 	// ── Rule 1: Elevated funding rate ────────────────────────────────────────
 	rate := snap.FundingRate.Rate
 	if rate > 0.0005 {
-		if !checkAndSetCooldown(symbol, "funding-high", 30*time.Minute) {
-				add("funding-elevated",
-				fmt.Sprintf("Funding rate spiking at +%.4f%% (APR %.1f%%) — longs paying heavily, overleveraged market. Watch for long squeeze if price stalls.",
-					rate*100, rate*100*3*365),
-				"high",
-			)
-		}
+		add("funding-elevated",
+			fmt.Sprintf("Funding rate spiking at +%.4f%% (APR %.1f%%) — longs paying heavily, overleveraged market. Watch for long squeeze if price stalls.",
+				rate*100, rate*100*3*365),
+			"high",
+		)
 	} else if rate < -0.0005 {
-		if !checkAndSetCooldown(symbol, "funding-low", 30*time.Minute) {
-			add("funding-elevated",
-				fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure. Watch for short squeeze rally.",
-					rate*100),
-				"high",
-			)
-		}
+		add("funding-elevated",
+			fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure. Watch for short squeeze rally.",
+				rate*100),
+			"high",
+		)
 	}
 
 	// ── Rule 2: OI spike (1h) ─────────────────────────────────────────────────
 	oi1h := snap.OpenInterest.OIChange1h
 	if oi1h > 2.0 {
-		if !checkAndSetCooldown(symbol, "oi-spike-1h", 30*time.Minute) {
-			add("oi-spike-1h",
-				fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Watch for volatile directional move.", oi1h),
-				"high",
-			)
-		}
+		add("oi-spike-1h",
+			fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Watch for volatile directional move.", oi1h),
+			"high",
+		)
 	} else if oi1h < -2.0 {
-		if !checkAndSetCooldown(symbol, "oi-spike-1h", 30*time.Minute) {
-			add("oi-spike-1h",
-				fmt.Sprintf("OI down %.1f%% in 1h — rapid deleveraging detected. Liquidation cascade risk.", math.Abs(oi1h)),
-				"high",
-			)
-		}
+		add("oi-spike-1h",
+			fmt.Sprintf("OI down %.1f%% in 1h — rapid deleveraging detected. Liquidation cascade risk.", math.Abs(oi1h)),
+			"high",
+		)
 	}
 
 	// ── Rule 3: OI divergence (24h) ───────────────────────────────────────────
 	oi24h := snap.OpenInterest.OIChange24h
 	if oi24h > 5.0 {
-		if !checkAndSetCooldown(symbol, "oi-divergence-24h", 60*time.Minute) {
-			add("oi-divergence-24h",
-				fmt.Sprintf("OI up %.1f%% in 24h — new money entering fast. Watch for volatile directional move as positions build.",
-					oi24h),
-				"medium",
-			)
-		}
+		add("oi-divergence-24h",
+			fmt.Sprintf("OI up %.1f%% in 24h — new money entering fast. Watch for volatile directional move as positions build.",
+				oi24h),
+			"medium",
+		)
 	} else if oi24h < -5.0 {
-		if !checkAndSetCooldown(symbol, "oi-divergence-24h", 60*time.Minute) {
-			add("oi-divergence-24h",
-				fmt.Sprintf("Open interest down %.1f%% in 24h — leverage unwinding detected. Market deleveraging, expect lower volatility.",
-					math.Abs(oi24h)),
-				"medium",
-			)
-		}
+		add("oi-divergence-24h",
+			fmt.Sprintf("Open interest down %.1f%% in 24h — leverage unwinding detected. Market deleveraging, expect lower volatility.",
+				math.Abs(oi24h)),
+			"medium",
+		)
 	}
 
 	// ── Rules 4 & 5: Long/short bias ─────────────────────────────────────────
@@ -255,29 +228,23 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 
 		switch {
 		case avgLong > 72.0:
-			if !checkAndSetCooldown(symbol, "longs-crowded", 60*time.Minute) {
-				add("long-bias",
-					fmt.Sprintf("%.1f%% of traders are long across exchanges — crowded trade. High liquidation risk below current price if bulls lose control.",
-						avgLong),
-					"medium",
-				)
-			}
+			add("long-bias",
+				fmt.Sprintf("%.1f%% of traders are long across exchanges — crowded trade. High liquidation risk below current price if bulls lose control.",
+					avgLong),
+				"medium",
+			)
 		case avgLong < 28.0:
-			if !checkAndSetCooldown(symbol, "shorts-crowded", 60*time.Minute) {
-				add("short-bias",
-					fmt.Sprintf("%.1f%% of traders are short — crowded short. Watch for short squeeze, especially on any positive catalyst.",
-						shortPct),
-					"medium",
-				)
-			}
+			add("short-bias",
+				fmt.Sprintf("%.1f%% of traders are short — crowded short. Watch for short squeeze, especially on any positive catalyst.",
+					shortPct),
+				"medium",
+			)
 		}
 	}
 
-	// ── Zone-based liquidation alerts (replaces old per-level and whale rules) ─
+	// ── Zone-based liquidation alerts ────────────────────────────────────────
 	zones := aggregateLiquidationZones(snap.LiquidationMap.Levels, snap.LiquidationMap.CurrentPrice)
-
-	if !checkAndSetCooldown(symbol, "zone", 30*time.Minute) {
-		for _, zone := range zones {
+	for _, zone := range zones {
 		var distanceToZone float64
 		if snap.LiquidationMap.CurrentPrice < zone.MinPrice {
 			distanceToZone = (zone.MinPrice - snap.LiquidationMap.CurrentPrice) / snap.LiquidationMap.CurrentPrice * 100
@@ -287,17 +254,8 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			distanceToZone = 0
 		}
 
-		// Skip zones at current price — 0.1% minimum distance
-		if distanceToZone < 0.1 {
-			continue
-		}
-
 		severity := zoneSeverity(zone, distanceToZone)
 		if severity == "" {
-			continue
-		}
-		// Global HIGH cooldown — skip this zone if we already sent a HIGH for this symbol recently
-		if severity == "high" && checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
 			continue
 		}
 
@@ -332,7 +290,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		}
 
 		distStr := fmt.Sprintf("%.2f%%", distanceToZone)
-		if distanceToZone < 0.01 {
+		if distanceToZone < 0.1 {
 			distStr = "at current price"
 		}
 
@@ -352,35 +310,38 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			whaleTag,
 		)
 
+		sweepProb := 0
+		if sigs.LiquidationMagnet != nil {
+			sweepProb = sigs.LiquidationMagnet.Probability
+		}
 		a := models.Alert{
-			ID:        zoneID,
-			Symbol:    symbol,
-			Message:   message,
-			Severity:  severity,
-			Timestamp: now,
+			ID:           zoneID,
+			Symbol:       symbol,
+			Message:      message,
+			Severity:     severity,
+			Timestamp:    now,
+			ClusterPrice: (zone.MinPrice + zone.MaxPrice) / 2,
+			ClusterSize:  zone.TotalUSD,
+			Distance:     distanceToZone / 100,
+			Probability:  sweepProb,
 		}
 		out = append(out, a)
 		if severity == "high" && OnHighAlert != nil {
 			OnHighAlert(a, snap, sigs)
 		}
-		}
 	}
 
 	// ── Rule 7: Negative funding (low) ────────────────────────────────────────
-	// Only fires if Rule 1 didn't already fire (avoid double-alerting).
 	if rate < -0.0001 && rate >= -0.0005 {
-		if !checkAndSetCooldown(symbol, "funding-negative", 30*time.Minute) {
-			add("funding-negative",
-				fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure. Watch for short squeeze rally.",
-					rate*100),
-				"low",
-			)
-		}
+		add("funding-negative",
+			fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure. Watch for short squeeze rally.",
+				rate*100),
+			"low",
+		)
 	}
 
 	// ── Rule 9: Short squeeze probability high ─────────────────────────────────
-	if sigs.ShortSqueezeProbability >= 65 && !checkAndSetCooldown(symbol, "short-squeeze", 30*time.Minute) {
-		if !checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
+	if sigs.ShortSqueezeProbability >= 65 {
 		id := fmt.Sprintf("short-squeeze-%d", sigs.ShortSqueezeProbability/10*10)
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
@@ -393,12 +354,10 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		if OnHighAlert != nil {
 			OnHighAlert(a, snap, sigs)
 		}
-		}
 	}
 
 	// ── Rule 10: Long squeeze probability high ──────────────────────────────────
-	if sigs.LongSqueezeProbability >= 65 && !checkAndSetCooldown(symbol, "long-squeeze", 30*time.Minute) {
-		if !checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
+	if sigs.LongSqueezeProbability >= 65 {
 		id := fmt.Sprintf("long-squeeze-%d", sigs.LongSqueezeProbability/10*10)
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
@@ -411,62 +370,51 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		if OnHighAlert != nil {
 			OnHighAlert(a, snap, sigs)
 		}
-		}
 	}
 
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
 	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
-		// Don't fire liquidation sweep alerts when distance < 0.1%
-		// This prevents "at current price" alerts that are too late
-		if m.Distance >= 0.1 {
-			magnetRound := 10.0
-			if m.Price < 100 {
-				magnetRound = 1.0
-			} else if m.Price < 1000 {
-				magnetRound = 5.0
-			}
-			roundedMagnetPrice := math.Round(m.Price/magnetRound) * magnetRound
-			id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
+		magnetRound := 10.0
+		if m.Price < 100 {
+			magnetRound = 1.0
+		} else if m.Price < 1000 {
+			magnetRound = 5.0
+		}
+		roundedMagnetPrice := math.Round(m.Price/magnetRound) * magnetRound
+		id := fmt.Sprintf("liq-magnet-%.0f", roundedMagnetPrice)
 
-			if !checkAndSetCooldown(symbol, "liq-magnet", 30*time.Minute) && !checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
-				distance := m.Distance // already in %
-				probability := m.Probability
-				var message string
-				if m.Side == "short" {
-					// Short cluster above = upward sweep likely
-					message = fmt.Sprintf(
-						"Short liquidity above price — upward sweep likely\n\n"+
-							"Cluster: %s | Distance: %.2f%% | Probability: %d%%",
-						formatUSD(m.SizeUSD), distance, probability,
-					)
-				} else {
-					// Long cluster below = downward sweep likely
-					message = fmt.Sprintf(
-						"Long liquidity below price — downward sweep likely\n\n"+
-							"Cluster: %s | Distance: %.2f%% | Probability: %d%%",
-						formatUSD(m.SizeUSD), distance, probability,
-					)
-				}
-
-				a := models.Alert{
-					ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
-					Symbol:    snap.Symbol,
-					Message:   message,
-					Severity:  "high",
-					Timestamp: now,
-				}
-				out = append(out, a)
-				if OnHighAlert != nil {
-					OnHighAlert(a, snap, sigs)
-				}
-			}
+		severity := "high"
+		if m.SizeUSD < 500_000 {
+			severity = "medium"
+		}
+		var message string
+		if m.Side == "short" {
+			message = fmt.Sprintf("Short liquidity above price — upward sweep likely\n\nCluster: %s | Distance: %.2f%% | Probability: %d%%",
+				formatUSD(m.SizeUSD), m.Distance, m.Probability)
+		} else {
+			message = fmt.Sprintf("Long liquidity below price — downward sweep likely\n\nCluster: %s | Distance: %.2f%% | Probability: %d%%",
+				formatUSD(m.SizeUSD), m.Distance, m.Probability)
+		}
+		a := models.Alert{
+			ID:           fmt.Sprintf("%s-%s", snap.Symbol, id),
+			Symbol:       snap.Symbol,
+			Message:      message,
+			Severity:     severity,
+			Timestamp:    now,
+			ClusterPrice: m.Price,
+			ClusterSize:  m.SizeUSD,
+			Distance:     m.Distance / 100,
+			Probability:  m.Probability,
+		}
+		out = append(out, a)
+		if severity == "high" && OnHighAlert != nil {
+			OnHighAlert(a, snap, sigs)
 		}
 	}
 
 	// ── Rule 12: Market regime change to Liquidation Event ──────────────────────
-	if sigs.Regime == models.RegimeLiquidation && !checkAndSetCooldown(symbol, "regime-liquidation", 60*time.Minute) {
-		if !checkAndSetCooldown(symbol, "global-high", 15*time.Minute) {
+	if sigs.Regime == models.RegimeLiquidation {
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
 			Symbol:    snap.Symbol,
@@ -478,11 +426,9 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		if OnHighAlert != nil {
 			OnHighAlert(a, snap, sigs)
 		}
-		}
 	}
 
 	// If a liq-magnet alert exists for this symbol, remove ALL zone alerts
-	// since the magnet alert already covers the most significant zone
 	hasMagnetAlert := false
 	for _, a := range out {
 		if strings.HasPrefix(a.ID, symbol+"-liq-magnet-") {

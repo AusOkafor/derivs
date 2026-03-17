@@ -77,11 +77,15 @@ type AIAnalysis struct {
 }
 
 type Alert struct {
-	ID        string    `json:"id"`
-	Symbol    string    `json:"symbol"`
-	Message   string    `json:"message"`
-	Severity  string    `json:"severity"` // "low" | "medium" | "high"
-	Timestamp time.Time `json:"timestamp"`
+	ID           string    `json:"id"`
+	Symbol       string    `json:"symbol"`
+	Message      string    `json:"message"`
+	Severity     string    `json:"severity"` // "low" | "medium" | "high"
+	Timestamp    time.Time `json:"timestamp"`
+	ClusterPrice float64   `json:"cluster_price"`
+	ClusterSize  float64   `json:"cluster_size"`
+	Distance     float64   `json:"distance"`     // stored as decimal (0.01 = 1%) for cards
+	Probability  int       `json:"probability"`
 }
 
 type AlertHistoryEntry struct {
