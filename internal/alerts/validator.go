@@ -12,14 +12,18 @@ const (
 )
 
 func ValidateAlert(alert models.Alert) error {
-	// Cluster size check — only when alert has cluster data
-	if alert.ClusterSize > 0 && alert.ClusterSize < MinClusterSize {
+	// Regime/OI alerts have ClusterSize = 0 — no size/distance filter, cooldown only
+	if alert.ClusterSize == 0 {
+		return nil
+	}
+
+	// Cluster size check
+	if alert.ClusterSize < MinClusterSize {
 		return fmt.Errorf("cluster $%.0f below $200k minimum", alert.ClusterSize)
 	}
 
 	// Distance check — block when distance < 0.1% (including 0.00%)
-	// Cluster-based alerts (ClusterSize > 0) must have meaningful distance
-	if alert.ClusterSize > 0 && alert.Distance < MinDistancePct {
+	if alert.Distance < MinDistancePct {
 		return fmt.Errorf("distance %.3f%% below 0.1%% minimum", alert.Distance*100)
 	}
 

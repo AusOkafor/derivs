@@ -1,6 +1,7 @@
 package alerts
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -28,11 +29,20 @@ func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 			continue
 		}
 
-		// Step 2 — Fingerprint deduplication
-		fp := GenerateFingerprint(alert)
-		if !e.cooldown.Allow(fp) {
-			log.Printf("[alerts] COOLDOWN %s: fingerprint %s", alert.ID, fp)
-			continue
+		// Step 2 — Cooldown (shared per-symbol for regime/OI alerts)
+		var cooldownKey string
+		if alert.ClusterSize == 0 {
+			cooldownKey = fmt.Sprintf("%s:regime", alert.Symbol)
+			if !e.cooldown.Allow(cooldownKey) {
+				log.Printf("[alerts] COOLDOWN regime %s", alert.Symbol)
+				continue
+			}
+		} else {
+			fp := GenerateFingerprint(alert)
+			if !e.cooldown.Allow(fp) {
+				log.Printf("[alerts] COOLDOWN %s: fingerprint %s", alert.ID, fp)
+				continue
+			}
 		}
 
 		// Step 3 — Downgrade HIGH to MEDIUM if cluster < $500k
