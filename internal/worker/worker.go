@@ -269,6 +269,12 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		rawAlerts := w.detector.Analyze(snap, sigs)
 		processedAlerts := w.alertEngine.Process(rawAlerts)
 		snapshots[sym] = symbolAlerts{detected: processedAlerts, snap: snap, sigs: sigs}
+		// Fire OnHighAlert for HIGH alerts that passed the engine (only after engine approval)
+		for _, alert := range processedAlerts {
+			if alert.Severity == "high" && alerts.OnHighAlert != nil {
+				alerts.OnHighAlert(alert, snap, sigs)
+			}
+		}
 		if proOnly {
 			log.Printf("worker: pro cycle found %d alerts for %s (raw: %d)", len(processedAlerts), sym, len(rawAlerts))
 		} else {

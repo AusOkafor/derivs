@@ -157,9 +157,6 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			Timestamp: now,
 		}
 		out = append(out, a)
-		if severity == "high" && OnHighAlert != nil {
-			OnHighAlert(a, snap, sigs)
-		}
 	}
 
 	// ── Rule 0: Liquidation burst (real-time from Binance) ─────────────────────
@@ -326,9 +323,6 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			Probability:  sweepProb,
 		}
 		out = append(out, a)
-		if severity == "high" && OnHighAlert != nil {
-			OnHighAlert(a, snap, sigs)
-		}
 	}
 
 	// ── Rule 7: Negative funding (low) ────────────────────────────────────────
@@ -367,9 +361,6 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			Timestamp: now,
 		}
 		out = append(out, a)
-		if OnHighAlert != nil {
-			OnHighAlert(a, snap, sigs)
-		}
 	}
 
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
@@ -411,9 +402,6 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 				Probability:  m.Probability,
 			}
 			out = append(out, a)
-			if severity == "high" && OnHighAlert != nil {
-				OnHighAlert(a, snap, sigs)
-			}
 		}
 	}
 
@@ -427,9 +415,6 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			Timestamp: now,
 		}
 		out = append(out, a)
-		if OnHighAlert != nil {
-			OnHighAlert(a, snap, sigs)
-		}
 	}
 
 	// If a liq-magnet alert exists for this symbol, remove ALL zone alerts
