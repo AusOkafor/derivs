@@ -18,6 +18,11 @@ func NewEngine() *Engine {
 	}
 }
 
+// Cooldown returns the cooldown manager for external use (e.g. heat feed throttling).
+func (e *Engine) Cooldown() *CooldownManager {
+	return e.cooldown
+}
+
 // Process takes raw alerts from Analyze() and returns only valid, non-duplicate alerts.
 func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 	var valid []models.Alert

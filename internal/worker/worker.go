@@ -34,18 +34,26 @@ const (
 var severityRank = map[string]int{"high": 0, "medium": 1, "low": 2}
 var numericSuffix = regexp.MustCompile(`^\d+$`)
 
+type symbolAlerts struct {
+	detected []models.Alert
+	snap     models.MarketSnapshot
+	sigs     models.MarketSignals
+}
+
 // Worker runs a background ticker that fetches market data, detects anomalies,
 // and dispatches Telegram notifications to active subscribers.
 type Worker struct {
-	aggregator  *aggregator.Aggregator
-	detector    *alerts.Detector
-	alertEngine *alerts.Engine
-	notifier    *notify.TelegramNotifier
-	db          *supabase.Client
-	calc        *feargreed.Calculator
-	running     atomic.Bool
-	freeRunning atomic.Bool
-	proRunning  atomic.Bool
+	aggregator   *aggregator.Aggregator
+	detector     *alerts.Detector
+	alertEngine  *alerts.Engine
+	notifier     *notify.TelegramNotifier
+	db           *supabase.Client
+	calc         *feargreed.Calculator
+	running      atomic.Bool
+	freeRunning  atomic.Bool
+	proRunning   atomic.Bool
+	lastSnapshots map[string]symbolAlerts
+	lastSnapMu   sync.Mutex
 }
 
 func New(
@@ -243,19 +251,17 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		log.Printf("[worker] free cycle %d subscribers after tier filter", len(subscribers))
 	}
 
-	// Collect symbols using allowedSymbols per subscriber.
+	// Collect symbols using allowedSymbols per subscriber, plus DefaultSymbols for heat feed.
 	symbolSet := make(map[string]struct{})
+	for _, sym := range config.DefaultSymbols {
+		symbolSet[sym] = struct{}{}
+	}
 	for _, sub := range subscribers {
 		for _, sym := range allowedSymbols(sub) {
 			symbolSet[sym] = struct{}{}
 		}
 	}
 
-	type symbolAlerts struct {
-		detected []models.Alert
-		snap     models.MarketSnapshot
-		sigs     models.MarketSignals
-	}
 	snapshots := make(map[string]symbolAlerts, len(symbolSet))
 
 	engine := signals.New()
@@ -290,6 +296,14 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 			}
 		}
 	}
+
+	// Store for heat feed (broadcastTopTarget uses engine-processed data only)
+	w.lastSnapMu.Lock()
+	w.lastSnapshots = make(map[string]symbolAlerts, len(snapshots))
+	for k, v := range snapshots {
+		w.lastSnapshots[k] = v
+	}
+	w.lastSnapMu.Unlock()
 
 	for _, sub := range subscribers {
 		if sub.ChatID == 0 {
@@ -421,71 +435,54 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 		Alert   *models.Alert
 	}
 
+	w.lastSnapMu.Lock()
+	processed := w.lastSnapshots
+	w.lastSnapMu.Unlock()
+
+	if len(processed) == 0 {
+		log.Printf("[worker] heat feed: no processed snapshots yet, skipping")
+		return
+	}
+
 	var candidates []TargetCandidate
-	var mu sync.Mutex
-
-	engine := signals.New()
-	for _, symbol := range config.DefaultSymbols {
-		snap, err := w.aggregator.FetchSnapshot(ctx, symbol)
-		if err != nil {
-			continue
-		}
-
-		sigs := engine.Analyze(snap, 0)
-		rawAlerts := w.detector.Analyze(snap, sigs)
-		detectedAlerts := w.alertEngine.Process(rawAlerts)
-
-		magnet := sigs.LiquidationMagnet
-		if magnet == nil {
-			continue
-		}
-
-		// Skip clusters at 0.00% distance
-		if magnet.Distance < 0.001 {
-			continue
-		}
-
-		// $200k minimum cluster size for heat feed (must match alerts.MinClusterSize)
-		if magnet.SizeUSD < alerts.MinClusterSize {
-			continue
-		}
-
-		distance := magnet.Distance
-		if distance < 0.0001 {
-			distance = 0.0001
-		}
-
-		gravityDom := sigs.LiquidityGravity.UpwardPull
-		if sigs.LiquidityGravity.DownwardPull > gravityDom {
-			gravityDom = sigs.LiquidityGravity.DownwardPull
-		}
-
-		score := (magnet.SizeUSD / distance) *
-			(float64(magnet.Probability) / 100) *
-			(gravityDom / 100)
-
-		// Minimum 70% probability for heat feed
-		if magnet.Probability < 70 {
-			continue
-		}
-
-		var bestAlert *models.Alert
-		for i := range detectedAlerts {
-			if detectedAlerts[i].Severity == "high" {
-				bestAlert = &detectedAlerts[i]
-				break
+	for sym, sa := range processed {
+		var bestScore float64
+		var bestTC *TargetCandidate
+		for _, alert := range sa.detected {
+			if alert.ClusterSize < 200_000 || alert.ClusterSize == 0 {
+				continue
+			}
+			effectiveDistance := math.Max(alert.Distance, 0.001)
+			prob := float64(alert.Probability) / 100
+			if prob <= 0 && sa.sigs.LiquidationMagnet != nil {
+				prob = float64(sa.sigs.LiquidationMagnet.Probability) / 100
+			}
+			if prob < 0.7 {
+				continue
+			}
+			gravityDom := math.Max(sa.sigs.LiquidityGravity.UpwardPull, sa.sigs.LiquidityGravity.DownwardPull) / 100
+			score := (alert.ClusterSize / effectiveDistance) * prob * gravityDom
+			if score > bestScore {
+				bestScore = score
+				var bestAlert *models.Alert
+				for i := range sa.detected {
+					if sa.detected[i].Severity == "high" && sa.detected[i].ClusterSize >= 200_000 {
+						bestAlert = &sa.detected[i]
+						break
+					}
+				}
+				bestTC = &TargetCandidate{
+					Symbol:  sym,
+					Score:   score,
+					Snap:    sa.snap,
+					Signals: sa.sigs,
+					Alert:   bestAlert,
+				}
 			}
 		}
-
-		mu.Lock()
-		candidates = append(candidates, TargetCandidate{
-			Symbol:  symbol,
-			Score:   score,
-			Snap:    snap,
-			Signals: sigs,
-			Alert:   bestAlert,
-		})
-		mu.Unlock()
+		if bestTC != nil {
+			candidates = append(candidates, *bestTC)
+		}
 	}
 
 	if len(candidates) == 0 {
@@ -526,6 +523,12 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 	message := sb.String()
 
 	top := candidates[0]
+	heatFeedKey := fmt.Sprintf("heatfeed:%s", top.Symbol)
+	if !w.alertEngine.Cooldown().Allow(heatFeedKey) {
+		log.Printf("[worker] heat feed: skipping %s (cooldown)", top.Symbol)
+		return
+	}
+
 	magnet := top.Signals.LiquidationMagnet
 	if magnet.Probability >= 80 && top.Alert != nil {
 		processed := w.ProcessAlerts([]models.Alert{*top.Alert})
