@@ -49,7 +49,10 @@ func main() {
 	sb := supabase.New(cfg.SupabaseURL, cfg.SupabaseServiceKey)
 	wrk := worker.New(agg, detector, tg, sb, calc)
 	alerts.SetOnHighAlert(func(a models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) {
-		// Alert has already passed engine (called from worker after Process)
+		// Only post large clusters to public channel
+		if a.ClusterSize > 0 && a.ClusterSize < 500_000 {
+			return // too small for public channel
+		}
 		if err := tg.PostTopAlert(a, snap, sigs); err != nil {
 			log.Printf("alerts: PostTopAlert: %v", err)
 		}

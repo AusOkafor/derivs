@@ -269,10 +269,13 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		rawAlerts := w.detector.Analyze(snap, sigs)
 		processedAlerts := w.alertEngine.Process(rawAlerts)
 		snapshots[sym] = symbolAlerts{detected: processedAlerts, snap: snap, sigs: sigs}
-		// Fire OnHighAlert for HIGH and MEDIUM alerts that passed the engine (only after engine approval)
-		for _, alert := range processedAlerts {
-			if (alert.Severity == "high" || alert.Severity == "medium") && alerts.OnHighAlert != nil {
-				alerts.OnHighAlert(alert, snap, sigs)
+		// Fire OnHighAlert for HIGH and MEDIUM alerts that passed the engine (only after engine approval).
+		// Only from pro cycle — free cycle must not post to public channel (avoids DOGE etc. from basic tier).
+		if proOnly {
+			for _, alert := range processedAlerts {
+				if (alert.Severity == "high" || alert.Severity == "medium") && alerts.OnHighAlert != nil {
+					alerts.OnHighAlert(alert, snap, sigs)
+				}
 			}
 		}
 		if proOnly {

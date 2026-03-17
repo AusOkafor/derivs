@@ -90,9 +90,10 @@ func aggregateLiquidationZones(levels []models.LiquidationLevel, currentPrice fl
 }
 
 const (
-	MinClusterSize      = 200_000  // $200k minimum for ANY liquidation alert (zone, magnet, heat feed)
-	highSeverityMinSize = 500_000  // $500k minimum for HIGH
-	medSeverityMinSize  = 100_000  // $100k minimum for MEDIUM (must be >= minClusterSize to fire)
+	MinClusterSize        = 200_000   // $200k minimum for ANY liquidation alert (zone, magnet, heat feed)
+	highSeverityMinSize   = 500_000   // $500k minimum for HIGH
+	medSeverityMinSize    = 100_000   // $100k minimum for MEDIUM (must be >= minClusterSize to fire)
+	minOIForRegimeAlert   = 100_000_000 // $100M minimum OI for regime/OI alerts (excludes small caps)
 )
 
 func zoneSeverity(zone LiquidationZone, distance float64) string {
@@ -185,6 +186,9 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	}
 
 	// ── Rule 2: OI spike (1h) ─────────────────────────────────────────────────
+	if snap.OpenInterest.OIUsd < minOIForRegimeAlert {
+		// Skip regime/OI alerts for small cap coins (OP, PENDLE, TIA, SUI, WLD, etc.)
+	} else {
 	oi1h := snap.OpenInterest.OIChange1h
 	if oi1h > 2.0 {
 		add("oi-spike-1h",
@@ -212,6 +216,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 				math.Abs(oi24h)),
 			"medium",
 		)
+	}
 	}
 
 	// ── Rules 4 & 5: Long/short bias ─────────────────────────────────────────
@@ -403,7 +408,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	}
 
 	// ── Rule 12: Market regime change to Liquidation Event ──────────────────────
-	if sigs.Regime == models.RegimeLiquidation {
+	if snap.OpenInterest.OIUsd >= minOIForRegimeAlert && sigs.Regime == models.RegimeLiquidation {
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
 			Symbol:    snap.Symbol,
