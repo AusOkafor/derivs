@@ -3,10 +3,28 @@ package alerts
 import (
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"derivs-backend/internal/models"
 )
+
+var (
+	blockLogMu   sync.Mutex
+	lastBlockLog = make(map[string]time.Time)
+)
+
+func shouldLogBlock(key string) bool {
+	blockLogMu.Lock()
+	defer blockLogMu.Unlock()
+	if last, ok := lastBlockLog[key]; ok {
+		if time.Since(last) < 5*time.Minute {
+			return false
+		}
+	}
+	lastBlockLog[key] = time.Now()
+	return true
+}
 
 type Engine struct {
 	cooldown *CooldownManager
@@ -30,7 +48,9 @@ func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 	for _, alert := range alerts {
 		// Step 1 — Validate
 		if err := ValidateAlert(alert); err != nil {
-			log.Printf("[alerts] BLOCKED %s: %v", alert.ID, err)
+			if shouldLogBlock(alert.ID) {
+				log.Printf("[alerts] BLOCKED %s: %v", alert.ID, err)
+			}
 			continue
 		}
 

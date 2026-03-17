@@ -255,6 +255,9 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		} else {
 			distanceToZone = 0
 		}
+		if distanceToZone <= 0 {
+			continue // skip — cluster at current price, meaningless
+		}
 
 		severity := zoneSeverity(zone, distanceToZone)
 		if severity == "" {
@@ -368,7 +371,9 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Rule 11: Liquidation magnet nearby ──────────────────────────────────────
 	if sigs.LiquidationMagnet != nil && sigs.LiquidationMagnet.Probability >= 65 {
 		m := sigs.LiquidationMagnet
-		if m.SizeUSD < MinClusterSize || m.Distance < 0.1 {
+		if m.Distance <= 0 {
+			// skip — magnet at current price
+		} else if m.SizeUSD < MinClusterSize || m.Distance < 0.1 {
 			// Skip — cluster below $200k or distance below 0.1%
 		} else {
 			magnetRound := 10.0
