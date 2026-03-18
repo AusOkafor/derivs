@@ -499,16 +499,50 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 	for i := 0; i < topN; i++ {
 		tc := candidates[i]
 		magnet := tc.Signals.LiquidationMagnet
-		clusterDesc := "Short cluster"
-		if magnet.Side == "long" {
-			clusterDesc = "Long cluster"
+		snap := tc.Snap
+		signals := tc.Signals
+		side := "Short"
+		if magnet != nil && magnet.Side == "long" {
+			side = "Long"
 		}
-		sizeStr := formatUSDWorker(magnet.SizeUSD)
-		rank := []string{"1️⃣", "2️⃣", "3️⃣"}[i]
-		sb.WriteString(fmt.Sprintf("%s <b>%s</b> — %s %s\n",
-			rank, tc.Symbol, clusterDesc, sizeStr))
-		sb.WriteString(fmt.Sprintf("   Distance: %.2f%% | Prob: %d%% | CASCADE: %s\n\n",
-			magnet.Distance, magnet.Probability, tc.Signals.CascadeRisk.Level))
+		clusterStr := formatUSDWorker(0)
+		priceStr := formatPriceWorker(0)
+		targetStr := formatPriceWorker(0)
+		distPct := 0.0
+		prob := 0
+		cascade := "—"
+		dirLabel := directionLabel("")
+		if tc.Alert != nil {
+			clusterStr = formatUSDWorker(tc.Alert.ClusterSize)
+			targetStr = formatPriceWorker(tc.Alert.ClusterPrice)
+			distPct = tc.Alert.Distance * 100
+		}
+		if snap.LiquidationMap.CurrentPrice > 0 {
+			priceStr = formatPriceWorker(snap.LiquidationMap.CurrentPrice)
+		}
+		if magnet != nil {
+			prob = magnet.Probability
+		}
+		if signals.CascadeRisk.Level != "" {
+			cascade = signals.CascadeRisk.Level
+		}
+		if signals.LiquidityGravity.Dominant != "" {
+			dirLabel = directionLabel(signals.LiquidityGravity.Dominant)
+		}
+		entry := fmt.Sprintf(
+			"%s <b>%s</b> — %s cluster %s\n   Price: %s | Target: %s | Distance: %.2f%% | Prob: %d%% | CASCADE: %s | %s\n\n",
+			rankEmoji(i+1),
+			tc.Symbol,
+			side,
+			clusterStr,
+			priceStr,
+			targetStr,
+			distPct,
+			prob,
+			cascade,
+			dirLabel,
+		)
+		sb.WriteString(entry)
 	}
 
 	sb.WriteString("📊 Full dashboard → derivlens.io\n")
@@ -609,6 +643,41 @@ func formatPriceStr(p float64) string {
 		return fmt.Sprintf("$%.3f", p)
 	}
 	return fmt.Sprintf("$%.4f", p)
+}
+
+func formatPriceWorker(p float64) string {
+	switch {
+	case p >= 1000:
+		return fmt.Sprintf("$%.0f", p)
+	case p >= 10:
+		return fmt.Sprintf("$%.2f", p)
+	case p >= 1:
+		return fmt.Sprintf("$%.3f", p)
+	case p >= 0.1:
+		return fmt.Sprintf("$%.4f", p)
+	case p >= 0.01:
+		return fmt.Sprintf("$%.5f", p)
+	default:
+		return fmt.Sprintf("$%.6f", p)
+	}
+}
+
+func rankEmoji(n int) string {
+	if n >= 1 && n <= 3 {
+		return []string{"1️⃣", "2️⃣", "3️⃣"}[n-1]
+	}
+	return fmt.Sprintf("%d.", n)
+}
+
+func directionLabel(dominant string) string {
+	switch dominant {
+	case "upward":
+		return "↑"
+	case "downward":
+		return "↓"
+	default:
+		return "—"
+	}
 }
 
 func formatUSDWorker(usd float64) string {

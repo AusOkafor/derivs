@@ -256,7 +256,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			distanceToZone = 0
 		}
 		if distanceToZone <= 0 {
-			continue // skip — cluster at current price, meaningless
+			continue // skip — cluster at current price, no actionable distance
 		}
 
 		severity := zoneSeverity(zone, distanceToZone)
