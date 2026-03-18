@@ -47,6 +47,20 @@ func main() {
 
 	tg := notify.NewTelegram(cfg.TelegramBotToken)
 	alerts.SetOnHighAlert(func(a models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) {
+		if !alerts.IsSafeToSend(a) {
+			return
+		}
+		// Only post cluster-based alerts to public channel
+		// Regime/OI alerts have ClusterSize == 0 — skip for public
+		if a.ClusterSize == 0 {
+			log.Printf("[channel] skipping regime alert for public channel: %s", a.Symbol)
+			return
+		}
+		// Raise bar for public channel — $500K minimum
+		if a.ClusterSize < 500_000 {
+			log.Printf("[channel] cluster $%.0f below $500K public minimum: %s", a.ClusterSize, a.Symbol)
+			return
+		}
 		if err := tg.PostTopAlert(a, snap, sigs); err != nil {
 			log.Printf("alerts: PostTopAlert: %v", err)
 		}
