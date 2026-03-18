@@ -995,22 +995,39 @@ func (h *Handler) TelegramWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := update.Message
-	if msg.Text != "/start" || msg.From.Username == "" {
+	if msg.Text != "/start" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	ctx := r.Context()
+	chatID := msg.Chat.ID
+	username := msg.From.Username
 
-	if err := h.db.UpdateChatID(ctx, msg.From.Username, msg.Chat.ID); err != nil {
-		log.Printf("telegram webhook: UpdateChatID(%s, %d): %v", msg.From.Username, msg.Chat.ID, err)
-		w.WriteHeader(http.StatusOK)
-		return
+	if username != "" {
+		if err := h.db.UpdateChatID(ctx, username, chatID); err != nil {
+			log.Printf("telegram webhook: UpdateChatID(%s, %d): %v", username, chatID, err)
+		}
 	}
 
-	welcome := "✅ <b>DerivLens Alerts Activated!</b>\nYou'll receive alerts for your subscribed symbols.\nPowered by DerivLens 🚀"
-	if err := h.notifier.SendMessage(ctx, msg.Chat.ID, welcome); err != nil {
-		log.Printf("telegram webhook: SendMessage(%d): %v", msg.Chat.ID, err)
+	dashboardLink := fmt.Sprintf("https://derivlens.io/dashboard?u=%s", username)
+	if username == "" {
+		dashboardLink = fmt.Sprintf("https://derivlens.io/dashboard?uid=%d", chatID)
+	}
+
+	welcomeMsg := fmt.Sprintf(
+		`👋 Welcome to DerivLens!
+
+📊 <b>Your dashboard:</b>
+<a href="%s">%s</a>
+
+⭐ Bookmark this link — it keeps your account connected on any device.
+
+Your alerts are now active. You'll receive notifications here automatically.`,
+		dashboardLink, dashboardLink,
+	)
+	if err := h.notifier.SendMessage(ctx, chatID, welcomeMsg); err != nil {
+		log.Printf("telegram webhook: SendMessage(%d): %v", chatID, err)
 	}
 
 	w.WriteHeader(http.StatusOK)
