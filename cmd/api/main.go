@@ -49,6 +49,9 @@ func main() {
 	sb := supabase.New(cfg.SupabaseURL, cfg.SupabaseServiceKey)
 	wrk := worker.New(agg, detector, tg, sb, calc)
 	alerts.SetOnHighAlert(func(a models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) {
+		if a.Severity == "low" {
+			return // don't post low alerts to public channel
+		}
 		if !alerts.IsSafeToSend(a) {
 			return
 		}
