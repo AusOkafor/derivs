@@ -56,9 +56,9 @@ func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 
 		// Step 2 — Multi-factor confirmation (skip for regime alerts; use probability as proxy)
 		if alert.ClusterSize > 0 {
-			if alert.Probability < 65 {
+			if alert.Probability < 55 {
 				if shouldLogBlock(alert.ID) {
-					log.Printf("[alerts] WEAK %s: probability %d%% below 65%% minimum", alert.ID, alert.Probability)
+					log.Printf("[alerts] WEAK %s: probability %d%% below 55%% minimum", alert.ID, alert.Probability)
 				}
 				continue
 			}
