@@ -54,7 +54,17 @@ func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 			continue
 		}
 
-		// Step 2 — Cooldown (shared per-symbol for regime/OI alerts)
+		// Step 2 — Multi-factor confirmation (skip for regime alerts; use probability as proxy)
+		if alert.ClusterSize > 0 {
+			if alert.Probability < 65 {
+				if shouldLogBlock(alert.ID) {
+					log.Printf("[alerts] WEAK %s: probability %d%% below 65%% minimum", alert.ID, alert.Probability)
+				}
+				continue
+			}
+		}
+
+		// Step 3 — Cooldown (shared per-symbol for regime/OI alerts)
 		var cooldownKey string
 		if alert.ClusterSize == 0 {
 			cooldownKey = fmt.Sprintf("%s:regime", alert.Symbol)
@@ -70,12 +80,8 @@ func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 			}
 		}
 
-		// Step 3 — Downgrade HIGH to MEDIUM if cluster < $500k
-		log.Printf("[engine] before downgrade: %s severity=%s cluster=%.0f",
-			alert.ID, alert.Severity, alert.ClusterSize)
+		// Step 4 — Downgrade HIGH to MEDIUM if cluster < $500k
 		if alert.Severity == "high" && alert.ClusterSize > 0 && alert.ClusterSize < highSeverityMinSize {
-			log.Printf("[engine] downgrading %s from high to medium: cluster $%.0f < $500k",
-				alert.ID, alert.ClusterSize)
 			alert.Severity = "medium"
 		}
 

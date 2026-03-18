@@ -9,7 +9,8 @@ func IsSafeToSend(alert models.Alert) bool {
 	if alert.ClusterSize == 0 {
 		return true
 	}
-	if alert.ClusterSize < MinClusterSize {
+	minSize := GetMinClusterSize(alert.Symbol)
+	if alert.ClusterSize < minSize {
 		return false
 	}
 	if alert.Distance < MinDistancePct {

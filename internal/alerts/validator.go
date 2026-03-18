@@ -11,15 +11,44 @@ const (
 	MinDistancePct = 0.001 // 0.1% minimum (Distance stored as decimal: 0.001 = 0.1%)
 )
 
+// symbolThresholds — adaptive min cluster size per symbol based on typical OI.
+var symbolThresholds = map[string]float64{
+	"BTC":    500_000,  // $500K — large cap
+	"ETH":    300_000,  // $300K — large cap
+	"SOL":    200_000,  // $200K — mid cap
+	"BNB":    200_000,  // $200K — mid cap
+	"XRP":    150_000,  // $150K — mid cap
+	"DOGE":   100_000,  // $100K — high volume meme
+	"AVAX":   100_000,  // $100K — mid cap
+	"LINK":   100_000,  // $100K
+	"ARB":    80_000,   // $80K — smaller cap
+	"OP":     80_000,   // $80K — smaller cap
+	"INJ":    80_000,   // $80K
+	"SUI":    80_000,   // $80K
+	"TIA":    60_000,   // $60K — small cap
+	"WLD":    60_000,   // $60K
+	"PENDLE": 60_000,   // $60K
+	"TON":    80_000,   // $80K
+}
+
+// GetMinClusterSize returns symbol-aware minimum cluster size. Default $200K.
+func GetMinClusterSize(symbol string) float64 {
+	if threshold, ok := symbolThresholds[symbol]; ok {
+		return threshold
+	}
+	return MinClusterSize
+}
+
 func ValidateAlert(alert models.Alert) error {
 	// Regime/OI alerts have ClusterSize = 0 — no size/distance filter, cooldown only
 	if alert.ClusterSize == 0 {
 		return nil
 	}
 
-	// Cluster size check
-	if alert.ClusterSize < MinClusterSize {
-		return fmt.Errorf("cluster $%.0f below $200k minimum", alert.ClusterSize)
+	minSize := GetMinClusterSize(alert.Symbol)
+	if alert.ClusterSize < minSize {
+		return fmt.Errorf("cluster $%.0f below $%.0f minimum for %s",
+			alert.ClusterSize, minSize, alert.Symbol)
 	}
 
 	// Distance check — block when distance < 0.1% (including 0.00%)
