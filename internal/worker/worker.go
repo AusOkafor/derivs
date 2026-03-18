@@ -154,9 +154,8 @@ func isProTier(tier string) bool {
 }
 
 // allowedSymbols returns the symbols a subscriber is allowed to receive alerts for.
-// Free: BTC, ETH, SOL. Basic: up to 5 symbols. Pro: all symbols.
+// Free: no alerts. Basic: up to 5 symbols. Pro: all 16 symbols.
 func allowedSymbols(sub supabase.Subscriber) []string {
-	freeSymbols := []string{"BTC", "ETH", "SOL"}
 	switch sub.Tier {
 	case "pro":
 		return sub.Symbols
@@ -165,35 +164,24 @@ func allowedSymbols(sub supabase.Subscriber) []string {
 			return sub.Symbols[:5]
 		}
 		return sub.Symbols
-	default: // free or empty
-		allowed := []string{}
-		for _, s := range sub.Symbols {
-			for _, f := range freeSymbols {
-				if strings.EqualFold(s, f) {
-					allowed = append(allowed, s)
-					break
-				}
-			}
-		}
-		return allowed
+	default: // free or empty — no alerts
+		return nil
 	}
 }
 
-// runCycleFree runs for free and basic tier subscribers, 5-min interval.
-// Free: BTC, ETH, SOL. Basic: up to 5 symbols.
+// runCycleFree runs for Basic tier only (5-min interval). Free tier gets NO alerts.
 func (w *Worker) runCycleFree(ctx context.Context) {
 	if !w.freeRunning.CompareAndSwap(false, true) {
-		log.Println("[worker] free cycle already running, skipping")
+		log.Println("[worker] basic cycle already running, skipping")
 		return
 	}
 	defer w.freeRunning.Store(false)
 
-	log.Printf("[worker] free cycle starting")
-	// Timeout prevents runCycle from blocking forever and leaving freeRunning stuck
+	log.Printf("[worker] basic cycle starting (Basic tier only — Free gets no alerts)")
 	runCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
-	n := w.runCycle(runCtx, false) // freeCycle = not pro
-	log.Printf("[worker] free cycle done, processed %d subscribers", n)
+	n := w.runCycle(runCtx, false) // basicCycle = Basic tier only
+	log.Printf("[worker] basic cycle done, processed %d subscribers", n)
 }
 
 // runCyclePro runs for pro-tier subscribers only, 1-min interval, all symbols.
@@ -222,33 +210,27 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		return 0
 	}
 
-	// Filter by tier.
-	if !proOnly {
-		log.Printf("[worker] free cycle GetActiveSubscribers returned %d total", len(subscribers))
-	}
+	// Filter by tier: proOnly = Pro only; !proOnly = Basic only (Free gets no alerts)
 	var filtered []supabase.Subscriber
 	for _, sub := range subscribers {
 		tier := sub.Tier
 		if tier == "" {
 			tier = "free"
 		}
+		if tier == "free" {
+			continue // free users get no alerts
+		}
 		if proOnly && !isProTier(tier) {
 			continue
 		}
 		if !proOnly && isProTier(tier) {
-			continue
+			continue // basic cycle: Pro excluded (handled by pro cycle)
 		}
 		filtered = append(filtered, sub)
 	}
 	subscribers = filtered
 	if len(subscribers) == 0 {
-		if !proOnly {
-			log.Printf("[worker] free cycle no free/basic subscribers after filter")
-		}
 		return 0
-	}
-	if !proOnly {
-		log.Printf("[worker] free cycle %d subscribers after tier filter", len(subscribers))
 	}
 
 	// Collect symbols using allowedSymbols per subscriber, plus DefaultSymbols for heat feed.
