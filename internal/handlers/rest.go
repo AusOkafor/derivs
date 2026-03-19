@@ -1063,6 +1063,38 @@ Your alerts are now active. You'll receive notifications here automatically.`,
 	w.WriteHeader(http.StatusOK)
 }
 
+// ─── Market status ────────────────────────────────────────────────────────────
+
+// MarketStatus handles GET /api/market/status
+// Returns current market activity level based on time since last alert.
+func (h *Handler) MarketStatus(w http.ResponseWriter, r *http.Request) {
+	lastAlert := h.worker.GetLastAlertTime()
+	since := time.Since(lastAlert)
+
+	status := "volatile"
+	message := "Market is active — alerts firing normally"
+
+	if lastAlert.IsZero() || since > 2*time.Hour {
+		status = "quiet"
+		message = "Market is ranging quietly — no significant setups detected. This is normal during low volatility periods."
+	} else if since > 30*time.Minute {
+		status = "active"
+		message = "Market is calm — monitoring for setups"
+	}
+
+	sinceMinutes := "0"
+	if !lastAlert.IsZero() {
+		sinceMinutes = fmt.Sprintf("%.0f", since.Minutes())
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":         status,
+		"last_alert_at":  lastAlert.Format(time.RFC3339),
+		"message":        message,
+		"since_minutes":  sinceMinutes,
+	})
+}
+
 // ─── Admin AI toggle ─────────────────────────────────────────────────────────
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) bool {

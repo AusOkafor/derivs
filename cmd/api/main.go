@@ -97,6 +97,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", h.Health)
+	mux.HandleFunc("/api/market/status", h.MarketStatus)
 	mux.HandleFunc("/api/waitlist", h.JoinWaitlist)
 	mux.HandleFunc("/api/snapshot", h.GetSnapshot)
 	mux.HandleFunc("/api/history", h.GetHistory)

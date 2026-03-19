@@ -43,17 +43,19 @@ type symbolAlerts struct {
 // Worker runs a background ticker that fetches market data, detects anomalies,
 // and dispatches Telegram notifications to active subscribers.
 type Worker struct {
-	aggregator   *aggregator.Aggregator
-	detector     *alerts.Detector
-	alertEngine  *alerts.Engine
-	notifier     *notify.TelegramNotifier
-	db           *supabase.Client
-	calc         *feargreed.Calculator
-	running      atomic.Bool
-	freeRunning  atomic.Bool
-	proRunning   atomic.Bool
+	aggregator    *aggregator.Aggregator
+	detector      *alerts.Detector
+	alertEngine   *alerts.Engine
+	notifier      *notify.TelegramNotifier
+	db            *supabase.Client
+	calc          *feargreed.Calculator
+	running       atomic.Bool
+	freeRunning   atomic.Bool
+	proRunning    atomic.Bool
 	lastSnapshots map[string]symbolAlerts
-	lastSnapMu   sync.Mutex
+	lastSnapMu    sync.Mutex
+	lastAlertTime time.Time
+	lastAlertMu   sync.Mutex
 }
 
 func New(
@@ -77,6 +79,13 @@ func New(
 // Used by OnHighAlert callback and broadcastTopTarget to ensure engine is applied.
 func (w *Worker) ProcessAlerts(alerts []models.Alert) []models.Alert {
 	return w.alertEngine.Process(alerts)
+}
+
+// GetLastAlertTime returns the time the most recent alert was sent to a subscriber.
+func (w *Worker) GetLastAlertTime() time.Time {
+	w.lastAlertMu.Lock()
+	defer w.lastAlertMu.Unlock()
+	return w.lastAlertTime
 }
 
 // scheduleDaily runs fn at target hour:minute UTC, then every 24h.
@@ -391,6 +400,9 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 					continue
 				}
 			}
+			w.lastAlertMu.Lock()
+			w.lastAlertTime = time.Now().UTC()
+			w.lastAlertMu.Unlock()
 
 			if proOnly {
 				log.Printf("worker: pro cycle sending alert to %s: %s", sub.TelegramUsername, ca.alert.Message)
