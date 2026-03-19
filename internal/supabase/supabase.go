@@ -361,14 +361,40 @@ func (c *Client) GetSubscriberTier(ctx context.Context, telegramUsername string)
 	return tier, status, nil
 }
 
-// WasAlertSent returns true if alertID was already logged for subscriberID within the last 30 minutes.
-// Only checks recent window to avoid permanent dedup (silent alert death).
-// GET {baseURL}/rest/v1/alert_log?subscriber_id=eq.{id}&alert_id=eq.{alertID}&sent_at=gte.{30minAgo}
+// isClusterAlertID reports whether alertID belongs to a price-specific cluster alert (zone/magnet/burst).
+// Cluster IDs end with a numeric price component (e.g. BTC-zone-84500, BTC-liq-magnet-84000).
+// Regime IDs are fixed strings (e.g. BTC-long-bias, BTC-oi-divergence-24h).
+func isClusterAlertID(alertID string) bool {
+	idx := strings.LastIndex(alertID, "-")
+	if idx < 0 {
+		return false
+	}
+	suffix := alertID[idx+1:]
+	if len(suffix) == 0 {
+		return false
+	}
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// WasAlertSent returns true if alertID was already logged for subscriberID within the cooldown window.
+// Cluster alerts (zones, magnets — contain a price in the ID) use a 30-min window.
+// Regime alerts (OI, funding, long/short bias — fixed IDs) use a 4-hour window to prevent spam.
 func (c *Client) WasAlertSent(ctx context.Context, subscriberID, alertID string) (bool, error) {
-	thirtyMinAgo := time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339)
+	window := 4 * time.Hour
+	// Cluster alerts have price-based IDs (e.g. BTC-zone-84500, BTC-liq-magnet-84000).
+	// Use shorter window so a new nearby cluster can still fire after 30 min.
+	if isClusterAlertID(alertID) {
+		window = 30 * time.Minute
+	}
+	cutoff := time.Now().UTC().Add(-window).Format(time.RFC3339)
 	url := fmt.Sprintf(
 		"%s/rest/v1/alert_log?subscriber_id=eq.%s&alert_id=eq.%s&sent_at=gte.%s&select=id",
-		c.baseURL, url.QueryEscape(subscriberID), url.QueryEscape(alertID), url.QueryEscape(thirtyMinAgo),
+		c.baseURL, url.QueryEscape(subscriberID), url.QueryEscape(alertID), url.QueryEscape(cutoff),
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

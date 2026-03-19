@@ -1,7 +1,6 @@
 package alerts
 
 import (
-	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -27,12 +26,14 @@ func shouldLogBlock(key string) bool {
 }
 
 type Engine struct {
-	cooldown *CooldownManager
+	cooldown       *CooldownManager // cluster alerts (zones, magnets): 30 min fingerprint
+	regimeCooldown *CooldownManager // regime alerts (OI, funding, bias): 4h per alert ID
 }
 
 func NewEngine() *Engine {
 	return &Engine{
-		cooldown: NewCooldownManager(30 * time.Minute),
+		cooldown:       NewCooldownManager(30 * time.Minute),
+		regimeCooldown: NewCooldownManager(4 * time.Hour),
 	}
 }
 
@@ -64,12 +65,12 @@ func (e *Engine) Process(alerts []models.Alert) []models.Alert {
 			}
 		}
 
-		// Step 3 — Cooldown (shared per-symbol for regime/OI alerts)
-		var cooldownKey string
+		// Step 3 — Cooldown
+		// Regime alerts (OI, funding, long/short bias — no cluster): 4h per alert ID.
+		// Cluster alerts (zones, magnets): 30 min per fingerprint.
 		if alert.ClusterSize == 0 {
-			cooldownKey = fmt.Sprintf("%s:regime", alert.Symbol)
-			if !e.cooldown.Allow(cooldownKey) {
-				log.Printf("[alerts] COOLDOWN regime %s", alert.Symbol)
+			if !e.regimeCooldown.Allow(alert.ID) {
+				log.Printf("[alerts] COOLDOWN regime %s", alert.ID)
 				continue
 			}
 		} else {
