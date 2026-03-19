@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"derivs-backend/internal/alerts"
 	"derivs-backend/internal/cards"
 	"derivs-backend/internal/models"
 )
@@ -173,10 +174,13 @@ func buildAlertCardData(alert models.Alert, snap models.MarketSnapshot, sigs mod
 
 	if clusterSize == 0 && sigs.LiquidationMagnet != nil {
 		magnet := sigs.LiquidationMagnet
-		clusterPrice = magnet.Price
-		clusterSize = magnet.SizeUSD
-		distance = magnet.Distance / 100
-		sweepProb = magnet.Probability
+		minSize := alerts.GetMinClusterSize(alert.Symbol)
+		if magnet.SizeUSD >= minSize && magnet.Distance >= 0.1 {
+			clusterPrice = magnet.Price
+			clusterSize = magnet.SizeUSD
+			distance = magnet.Distance / 100
+			sweepProb = magnet.Probability
+		}
 	}
 	if clusterSize == 0 {
 		return nil
