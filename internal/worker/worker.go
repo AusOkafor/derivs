@@ -420,6 +420,16 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 			w.lastAlertTime = time.Now().UTC()
 			w.lastAlertMu.Unlock()
 
+			// Discord webhook — fire alongside Telegram if configured
+			if sub.DiscordWebhookURL != "" {
+				currentPrice := ca.snap.LiquidationMap.CurrentPrice
+				go func(hookURL string, alert models.Alert, price float64) {
+					if err := notify.SendDiscordAlert(context.Background(), hookURL, alert, price); err != nil {
+						log.Printf("[discord] SendDiscordAlert(@%s): %v", sub.TelegramUsername, err)
+					}
+				}(sub.DiscordWebhookURL, ca.alert, currentPrice)
+			}
+
 			if proOnly {
 				log.Printf("worker: pro cycle sending alert to %s: %s", sub.TelegramUsername, ca.alert.Message)
 			} else {

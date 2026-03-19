@@ -28,6 +28,7 @@ type Subscriber struct {
 	StripeSubscriptionID string          `json:"stripe_subscription_id"`
 	SubscriptionStatus   string          `json:"subscription_status"`
 	ProSince             *time.Time      `json:"pro_since"`
+	DiscordWebhookURL    string          `json:"discord_webhook_url"`
 }
 
 // subscriberInsert is the insert-only shape — omits id and active so Supabase
@@ -74,7 +75,7 @@ func New(baseURL, serviceKey string) *Client {
 // GetActiveSubscribers returns all rows from `subscribers` where active=true.
 // GET {baseURL}/rest/v1/subscribers?active=eq.true&select=*
 func (c *Client) GetActiveSubscribers(ctx context.Context) ([]Subscriber, error) {
-	url := c.baseURL + "/rest/v1/subscribers?active=eq.true&select=id,telegram_username,chat_id,symbols,rules,active,tier,stripe_customer_id,stripe_subscription_id,subscription_status,pro_since"
+	url := c.baseURL + "/rest/v1/subscribers?active=eq.true&select=id,telegram_username,chat_id,symbols,rules,active,tier,stripe_customer_id,stripe_subscription_id,subscription_status,pro_since,discord_webhook_url"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("supabase: build request: %w", err)
@@ -679,6 +680,53 @@ func (c *Client) AddToWaitlist(ctx context.Context, email, tier, username string
 		return fmt.Errorf("supabase error: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// UpdateDiscordWebhook sets (or clears) the discord_webhook_url for a subscriber by username.
+// Pass an empty string to remove the webhook.
+func (c *Client) UpdateDiscordWebhook(ctx context.Context, username, webhookURL string) error {
+	reqURL := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, url.QueryEscape(username))
+	body, _ := json.Marshal(map[string]any{"discord_webhook_url": webhookURL})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: UpdateDiscordWebhook: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("supabase: UpdateDiscordWebhook: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// GetDiscordWebhook returns the current discord_webhook_url for a subscriber.
+func (c *Client) GetDiscordWebhook(ctx context.Context, username string) (string, error) {
+	reqURL := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=discord_webhook_url&limit=1", c.baseURL, url.QueryEscape(username))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("supabase: GetDiscordWebhook: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("supabase: GetDiscordWebhook: status %d", resp.StatusCode)
+	}
+	var rows []struct {
+		DiscordWebhookURL string `json:"discord_webhook_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil || len(rows) == 0 {
+		return "", nil
+	}
+	return rows[0].DiscordWebhookURL, nil
 }
 
 // GetSubscriberIDByChatID returns the subscriber UUID for the given Telegram chat ID.

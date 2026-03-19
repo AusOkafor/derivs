@@ -1388,3 +1388,72 @@ func (h *Handler) CustomPriceAlerts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
+
+// ─── Discord webhook settings ─────────────────────────────────────────────────
+
+// DiscordWebhook handles GET / POST / DELETE /api/settings/discord
+//
+//	GET    ?username=X                   → returns masked webhook URL
+//	POST   ?username=X  body {url}       → sets webhook URL (validates discord.com domain)
+//	DELETE ?username=X                   → removes webhook URL
+func (h *Handler) DiscordWebhook(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if err := validateUsername(username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		hookURL, err := h.db.GetDiscordWebhook(r.Context(), username)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch"})
+			return
+		}
+		masked := ""
+		if hookURL != "" {
+			// Show only the first 40 chars so the token is not fully exposed
+			if len(hookURL) > 40 {
+				masked = hookURL[:40] + "…"
+			} else {
+				masked = hookURL
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"webhook_url": masked, "set": fmt.Sprintf("%v", hookURL != "")})
+
+	case http.MethodPost:
+		var body struct {
+			URL string `json:"url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		if !isValidDiscordWebhookURL(body.URL) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "URL must be a discord.com webhook URL"})
+			return
+		}
+		if err := h.db.UpdateDiscordWebhook(r.Context(), username, body.URL); err != nil {
+			log.Printf("DiscordWebhook set: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+
+	case http.MethodDelete:
+		if err := h.db.UpdateDiscordWebhook(r.Context(), username, ""); err != nil {
+			log.Printf("DiscordWebhook delete: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to remove"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func isValidDiscordWebhookURL(u string) bool {
+	return strings.HasPrefix(u, "https://discord.com/api/webhooks/") ||
+		strings.HasPrefix(u, "https://discordapp.com/api/webhooks/")
+}

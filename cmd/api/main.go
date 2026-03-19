@@ -104,6 +104,7 @@ func main() {
 	mux.HandleFunc("/api/alerts", h.GetAlerts)
 	mux.HandleFunc("/api/alerts/history", h.GetAlertHistory)
 	mux.HandleFunc("/api/alerts/custom", h.CustomPriceAlerts)
+	mux.HandleFunc("/api/settings/discord", h.DiscordWebhook)
 	mux.HandleFunc("/api/tickers", h.GetTickers)
 	mux.HandleFunc("/api/subscribe", h.Subscribe)
 	mux.HandleFunc("/api/unsubscribe", h.Unsubscribe)
