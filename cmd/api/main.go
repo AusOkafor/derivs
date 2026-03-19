@@ -52,12 +52,15 @@ func main() {
 		if a.Severity == "low" {
 			return // don't post low alerts to public channel
 		}
+		if a.ClusterSize == 0 {
+			log.Printf("[channel] skipping regime alert for public channel: %s", a.Symbol)
+			return
+		}
 		if !alerts.IsSafeToSend(a) {
 			return
 		}
 		// Only post cluster alerts with $500K+ to public channel
-		// Regime/OI alerts (ClusterSize == 0) — post LOW and MEDIUM too
-		if a.ClusterSize > 0 && a.ClusterSize < 500_000 {
+		if a.ClusterSize < 500_000 {
 			return
 		}
 		if err := tg.PostTopAlert(a, snap, sigs); err != nil {
