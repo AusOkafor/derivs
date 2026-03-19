@@ -89,12 +89,17 @@ type Alert struct {
 }
 
 type AlertHistoryEntry struct {
-	ID          string    `json:"id"`
-	Symbol      string    `json:"symbol"`
-	AlertID     string    `json:"alert_id"`
-	Message     string    `json:"message"`
-	Severity    string    `json:"severity"`
-	TriggeredAt time.Time `json:"triggered_at"`
+	ID            string     `json:"id"`
+	Symbol        string     `json:"symbol"`
+	AlertID       string     `json:"alert_id"`
+	Message       string     `json:"message"`
+	Severity      string     `json:"severity"`
+	TriggeredAt   time.Time  `json:"triggered_at"`
+	PriceAtAlert  *float64   `json:"price_at_alert,omitempty"`
+	Price15m      *float64   `json:"price_15m,omitempty"`
+	Price1h       *float64   `json:"price_1h,omitempty"`
+	OutcomePct15m *float64   `json:"outcome_pct_15m,omitempty"`
+	OutcomePct1h  *float64   `json:"outcome_pct_1h,omitempty"`
 }
 
 type MarketFearGreed struct {

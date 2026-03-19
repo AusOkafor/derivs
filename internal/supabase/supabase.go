@@ -428,14 +428,18 @@ func (c *Client) GetRecentAlertLogs(ctx context.Context, subscriberID string, si
 
 // LogAlertHistory logs every alert that fires (regardless of subscriber dedup).
 // POST {baseURL}/rest/v1/alert_history
-func (c *Client) LogAlertHistory(ctx context.Context, symbol, alertID, message, severity string) error {
+func (c *Client) LogAlertHistory(ctx context.Context, symbol, alertID, message, severity string, priceAtAlert float64) error {
 	url := c.baseURL + "/rest/v1/alert_history"
-	body, _ := json.Marshal(map[string]any{
-		"symbol":      symbol,
-		"alert_id":    alertID,
-		"message":    message,
-		"severity":   severity,
-	})
+	row := map[string]any{
+		"symbol":    symbol,
+		"alert_id":  alertID,
+		"message":   message,
+		"severity":  severity,
+	}
+	if priceAtAlert > 0 {
+		row["price_at_alert"] = priceAtAlert
+	}
+	body, _ := json.Marshal(row)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("supabase: build request: %w", err)
@@ -456,7 +460,7 @@ func (c *Client) LogAlertHistory(ctx context.Context, symbol, alertID, message, 
 // GetAlertHistory returns the last N alerts for a symbol (or all symbols if symbol is empty).
 // GET {baseURL}/rest/v1/alert_history?order=triggered_at.desc&limit=N
 func (c *Client) GetAlertHistory(ctx context.Context, symbol string, limit int) ([]models.AlertHistoryEntry, error) {
-	reqURL := fmt.Sprintf("%s/rest/v1/alert_history?order=triggered_at.desc&limit=%d&select=id,symbol,alert_id,message,severity,triggered_at", c.baseURL, limit)
+	reqURL := fmt.Sprintf("%s/rest/v1/alert_history?order=triggered_at.desc&limit=%d&select=id,symbol,alert_id,message,severity,triggered_at,price_at_alert,price_15m,price_1h,outcome_pct_15m,outcome_pct_1h", c.baseURL, limit)
 	if symbol != "" {
 		reqURL += "&symbol=eq." + url.QueryEscape(symbol)
 	}
@@ -478,6 +482,61 @@ func (c *Client) GetAlertHistory(ctx context.Context, symbol string, limit int) 
 		return nil, fmt.Errorf("supabase: GetAlertHistory decode: %w", err)
 	}
 	return entries, nil
+}
+
+// GetAlertsPendingOutcome returns alert_history rows where the given outcome column is NULL,
+// triggered between minAge and maxAge ago, and price_at_alert is non-null.
+// outcomeCol must be "price_15m" or "price_1h".
+func (c *Client) GetAlertsPendingOutcome(ctx context.Context, outcomeCol string, minAge, maxAge time.Duration) ([]models.AlertHistoryEntry, error) {
+	now := time.Now().UTC()
+	lt := now.Add(-minAge).Format(time.RFC3339)
+	gt := now.Add(-maxAge).Format(time.RFC3339)
+	reqURL := fmt.Sprintf(
+		"%s/rest/v1/alert_history?%s=is.null&price_at_alert=not.is.null&triggered_at=lt.%s&triggered_at=gt.%s&select=id,symbol,price_at_alert&limit=100",
+		c.baseURL, url.QueryEscape(outcomeCol), url.QueryEscape(lt), url.QueryEscape(gt),
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetAlertsPendingOutcome: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetAlertsPendingOutcome: status %d", resp.StatusCode)
+	}
+	var entries []models.AlertHistoryEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		return nil, fmt.Errorf("supabase: GetAlertsPendingOutcome decode: %w", err)
+	}
+	return entries, nil
+}
+
+// UpdateAlertOutcome patches the outcome price and pct columns for a single alert_history row.
+func (c *Client) UpdateAlertOutcome(ctx context.Context, id, priceCol, pctCol string, currentPrice, pctChange float64) error {
+	reqURL := fmt.Sprintf("%s/rest/v1/alert_history?id=eq.%s", c.baseURL, url.QueryEscape(id))
+	body, _ := json.Marshal(map[string]any{
+		priceCol: currentPrice,
+		pctCol:   pctChange,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: UpdateAlertOutcome: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("supabase: UpdateAlertOutcome: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // LogAlert inserts a row into the `alert_log` table.

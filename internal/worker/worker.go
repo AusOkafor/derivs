@@ -132,7 +132,9 @@ func (w *Worker) Start(ctx context.Context) {
 	freeTicker := time.NewTicker(5 * time.Minute)
 	proTicker := time.NewTicker(1 * time.Minute)
 	topTargetTicker := time.NewTicker(30 * time.Minute)
+	outcomeTicker := time.NewTicker(5 * time.Minute)
 	defer topTargetTicker.Stop()
+	defer outcomeTicker.Stop()
 
 	// Run both immediately on start
 	go w.runCycleFree(ctx)
@@ -148,6 +150,8 @@ func (w *Worker) Start(ctx context.Context) {
 			go w.runCyclePro(ctx)
 		case <-topTargetTicker.C:
 			go w.broadcastTopTarget(ctx)
+		case <-outcomeTicker.C:
+			go w.backfillOutcomes(ctx)
 		case <-ctx.Done():
 			log.Println("worker: shutting down")
 			freeTicker.Stop()
@@ -281,9 +285,10 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		} else {
 			log.Printf("[worker] free cycle found %d alerts for %s (raw: %d)", len(processedAlerts), sym, len(rawAlerts))
 		}
-		// Log every processed alert to alert_history
+		// Log every processed alert to alert_history (with current price for outcome tracking)
+		currentPrice := snap.LiquidationMap.CurrentPrice
 		for _, alert := range processedAlerts {
-			if err := w.db.LogAlertHistory(ctx, sym, alert.ID, alert.Message, alert.Severity); err != nil {
+			if err := w.db.LogAlertHistory(ctx, sym, alert.ID, alert.Message, alert.Severity, currentPrice); err != nil {
 				log.Printf("worker: LogAlertHistory(%s): %v", sym, err)
 			}
 		}
@@ -589,6 +594,83 @@ func (w *Worker) broadcastTopTarget(ctx context.Context) {
 
 	log.Printf("[worker] top target broadcast: top %d — %s score=%.0f prob=%d%%",
 		topN, top.Symbol, top.Score, magnet.Probability)
+}
+
+// backfillOutcomes fetches price outcomes for alerts fired 15m and 1h ago.
+// It groups pending alerts by symbol, fetches the current price once per symbol,
+// then patches price_15m/price_1h and outcome_pct columns in alert_history.
+func (w *Worker) backfillOutcomes(ctx context.Context) {
+	type pending struct {
+		id           string
+		priceAtAlert float64
+		priceCol     string
+		pctCol       string
+	}
+
+	collect := func(outcomeCol, priceCol, pctCol string, minAge, maxAge time.Duration) map[string][]pending {
+		entries, err := w.db.GetAlertsPendingOutcome(ctx, outcomeCol, minAge, maxAge)
+		if err != nil {
+			log.Printf("[outcomes] GetAlertsPendingOutcome(%s): %v", outcomeCol, err)
+			return nil
+		}
+		bySymbol := make(map[string][]pending)
+		for _, e := range entries {
+			if e.PriceAtAlert == nil || *e.PriceAtAlert == 0 {
+				continue
+			}
+			bySymbol[e.Symbol] = append(bySymbol[e.Symbol], pending{
+				id:           e.ID,
+				priceAtAlert: *e.PriceAtAlert,
+				priceCol:     priceCol,
+				pctCol:       pctCol,
+			})
+		}
+		return bySymbol
+	}
+
+	pending15m := collect("price_15m", "price_15m", "outcome_pct_15m", 15*time.Minute, 4*time.Hour)
+	pending1h := collect("price_1h", "price_1h", "outcome_pct_1h", 1*time.Hour, 8*time.Hour)
+
+	// Merge symbol sets
+	symbolSet := make(map[string]struct{})
+	for sym := range pending15m {
+		symbolSet[sym] = struct{}{}
+	}
+	for sym := range pending1h {
+		symbolSet[sym] = struct{}{}
+	}
+	if len(symbolSet) == 0 {
+		return
+	}
+
+	// Fetch current price per symbol (one call each)
+	prices := make(map[string]float64)
+	for sym := range symbolSet {
+		price, _, err := w.aggregator.FetchTicker(ctx, sym)
+		if err != nil {
+			log.Printf("[outcomes] FetchTicker(%s): %v", sym, err)
+			continue
+		}
+		prices[sym] = price
+	}
+
+	update := func(bySymbol map[string][]pending) {
+		for sym, items := range bySymbol {
+			currentPrice, ok := prices[sym]
+			if !ok || currentPrice == 0 {
+				continue
+			}
+			for _, p := range items {
+				pct := (currentPrice - p.priceAtAlert) / p.priceAtAlert * 100
+				if err := w.db.UpdateAlertOutcome(ctx, p.id, p.priceCol, p.pctCol, currentPrice, pct); err != nil {
+					log.Printf("[outcomes] UpdateAlertOutcome(%s): %v", p.id, err)
+				}
+			}
+		}
+	}
+
+	update(pending15m)
+	update(pending1h)
 }
 
 // formatAlertMessage produces the same clean format as the public channel text alerts.
