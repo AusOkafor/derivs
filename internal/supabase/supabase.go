@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"derivs-backend/internal/models"
@@ -677,6 +679,181 @@ func (c *Client) AddToWaitlist(ctx context.Context, email, tier, username string
 		return fmt.Errorf("supabase error: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// GetSubscriberIDByUsername returns the subscriber UUID for the given Telegram username.
+func (c *Client) GetSubscriberIDByUsername(ctx context.Context, username string) (string, string, error) {
+	reqURL := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=id,tier&active=eq.true", c.baseURL, url.QueryEscape(username))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("supabase: GetSubscriberIDByUsername: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("supabase: GetSubscriberIDByUsername: status %d", resp.StatusCode)
+	}
+	var rows []struct {
+		ID   string `json:"id"`
+		Tier string `json:"tier"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil || len(rows) == 0 {
+		return "", "", fmt.Errorf("supabase: subscriber not found")
+	}
+	return rows[0].ID, rows[0].Tier, nil
+}
+
+// CreateCustomPriceAlert inserts a new custom price alert for a subscriber.
+func (c *Client) CreateCustomPriceAlert(ctx context.Context, subscriberID, symbol, direction, note string, targetPrice float64) error {
+	reqURL := c.baseURL + "/rest/v1/custom_price_alerts"
+	body, _ := json.Marshal(map[string]any{
+		"subscriber_id": subscriberID,
+		"symbol":        symbol,
+		"target_price":  targetPrice,
+		"direction":     direction,
+		"note":          note,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: CreateCustomPriceAlert: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("supabase: CreateCustomPriceAlert: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// GetCustomPriceAlerts returns active (non-triggered) custom price alerts for a subscriber.
+func (c *Client) GetCustomPriceAlerts(ctx context.Context, subscriberID string) ([]models.CustomPriceAlert, error) {
+	reqURL := fmt.Sprintf("%s/rest/v1/custom_price_alerts?subscriber_id=eq.%s&triggered=eq.false&order=created_at.desc&select=id,subscriber_id,symbol,target_price,direction,note,triggered,triggered_at,created_at",
+		c.baseURL, url.QueryEscape(subscriberID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetCustomPriceAlerts: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetCustomPriceAlerts: status %d", resp.StatusCode)
+	}
+	var alerts []models.CustomPriceAlert
+	if err := json.NewDecoder(resp.Body).Decode(&alerts); err != nil {
+		return nil, fmt.Errorf("supabase: GetCustomPriceAlerts decode: %w", err)
+	}
+	return alerts, nil
+}
+
+// DeleteCustomPriceAlert deletes a custom price alert owned by the subscriber.
+func (c *Client) DeleteCustomPriceAlert(ctx context.Context, id, subscriberID string) error {
+	reqURL := fmt.Sprintf("%s/rest/v1/custom_price_alerts?id=eq.%s&subscriber_id=eq.%s",
+		c.baseURL, url.QueryEscape(id), url.QueryEscape(subscriberID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, reqURL, nil)
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: DeleteCustomPriceAlert: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("supabase: DeleteCustomPriceAlert: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// GetPendingCustomPriceAlerts returns all non-triggered custom price alerts across all subscribers.
+func (c *Client) GetPendingCustomPriceAlerts(ctx context.Context) ([]models.CustomPriceAlert, error) {
+	reqURL := fmt.Sprintf("%s/rest/v1/custom_price_alerts?triggered=eq.false&select=id,subscriber_id,symbol,target_price,direction,note&limit=500", c.baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetPendingCustomPriceAlerts: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetPendingCustomPriceAlerts: status %d", resp.StatusCode)
+	}
+	var alerts []models.CustomPriceAlert
+	if err := json.NewDecoder(resp.Body).Decode(&alerts); err != nil {
+		return nil, fmt.Errorf("supabase: GetPendingCustomPriceAlerts decode: %w", err)
+	}
+	return alerts, nil
+}
+
+// MarkCustomPriceAlertTriggered marks a custom price alert as triggered.
+func (c *Client) MarkCustomPriceAlertTriggered(ctx context.Context, id string) error {
+	reqURL := fmt.Sprintf("%s/rest/v1/custom_price_alerts?id=eq.%s", c.baseURL, url.QueryEscape(id))
+	body, _ := json.Marshal(map[string]any{
+		"triggered":    true,
+		"triggered_at": time.Now().UTC().Format(time.RFC3339),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: MarkCustomPriceAlertTriggered: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("supabase: MarkCustomPriceAlertTriggered: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// CountCustomPriceAlerts returns the number of active custom price alerts for a subscriber.
+func (c *Client) CountCustomPriceAlerts(ctx context.Context, subscriberID string) (int, error) {
+	reqURL := fmt.Sprintf("%s/rest/v1/custom_price_alerts?subscriber_id=eq.%s&triggered=eq.false&select=id", c.baseURL, url.QueryEscape(subscriberID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "count=exact")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("supabase: CountCustomPriceAlerts: %w", err)
+	}
+	defer resp.Body.Close()
+	// PostgREST returns Content-Range: 0-4/5 — parse the total
+	cr := resp.Header.Get("Content-Range")
+	if cr == "" {
+		var rows []map[string]any
+		json.NewDecoder(resp.Body).Decode(&rows) //nolint:errcheck
+		return len(rows), nil
+	}
+	// Format: "0-N/total" or "*/total"
+	parts := strings.Split(cr, "/")
+	if len(parts) == 2 {
+		n, _ := strconv.Atoi(parts[1])
+		return n, nil
+	}
+	return 0, nil
 }
 
 // setHeaders applies the standard Supabase auth headers to every request.

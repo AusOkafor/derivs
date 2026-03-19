@@ -102,6 +102,19 @@ type AlertHistoryEntry struct {
 	OutcomePct1h  *float64   `json:"outcome_pct_1h,omitempty"`
 }
 
+// CustomPriceAlert is a user-defined price alert stored in custom_price_alerts.
+type CustomPriceAlert struct {
+	ID          string     `json:"id"`
+	SubscriberID string    `json:"subscriber_id"`
+	Symbol      string     `json:"symbol"`
+	TargetPrice float64    `json:"target_price"`
+	Direction   string     `json:"direction"` // "above" | "below"
+	Note        string     `json:"note,omitempty"`
+	Triggered   bool       `json:"triggered"`
+	TriggeredAt *time.Time `json:"triggered_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
 type MarketFearGreed struct {
 	Value int    `json:"value"`
 	Label string `json:"label"`

@@ -1147,3 +1147,109 @@ func (h *Handler) AIStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ai_enabled": analysis.IsAIEnabled()})
 }
+
+// ─── Custom price alert limits by tier ───────────────────────────────────────
+
+const (
+	customAlertLimitBasic = 5
+	customAlertLimitPro   = 20
+)
+
+func customAlertLimit(tier string) int {
+	if tier == "pro" {
+		return customAlertLimitPro
+	}
+	return customAlertLimitBasic
+}
+
+// CustomPriceAlerts handles GET / POST / DELETE /api/alerts/custom
+//
+//	GET    ?username=X            → list active alerts for user
+//	POST   body {username, symbol, target_price, direction, note}
+//	DELETE ?username=X&id=Y      → delete one alert owned by user
+func (h *Handler) CustomPriceAlerts(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if err := validateUsername(username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username required"})
+		return
+	}
+
+	subscriberID, tier, err := h.db.GetSubscriberIDByUsername(r.Context(), username)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "subscriber not found — subscribe via Telegram first"})
+		return
+	}
+	if tier == "free" || tier == "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "custom alerts require Basic or Pro plan"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		alerts, err := h.db.GetCustomPriceAlerts(r.Context(), subscriberID)
+		if err != nil {
+			log.Printf("CustomPriceAlerts GET: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch alerts"})
+			return
+		}
+		writeJSON(w, http.StatusOK, alerts)
+
+	case http.MethodPost:
+		var body struct {
+			Symbol      string  `json:"symbol"`
+			TargetPrice float64 `json:"target_price"`
+			Direction   string  `json:"direction"`
+			Note        string  `json:"note"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		if body.Symbol == "" || body.TargetPrice <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol and target_price required"})
+			return
+		}
+		if body.Direction != "above" && body.Direction != "below" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "direction must be 'above' or 'below'"})
+			return
+		}
+		if len(body.Note) > 100 {
+			body.Note = body.Note[:100]
+		}
+
+		count, err := h.db.CountCustomPriceAlerts(r.Context(), subscriberID)
+		if err != nil {
+			log.Printf("CustomPriceAlerts count: %v", err)
+		}
+		limit := customAlertLimit(tier)
+		if count >= limit {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": fmt.Sprintf("limit of %d active custom alerts reached for %s plan", limit, tier),
+			})
+			return
+		}
+
+		if err := h.db.CreateCustomPriceAlert(r.Context(), subscriberID, strings.ToUpper(body.Symbol), body.Direction, body.Note, body.TargetPrice); err != nil {
+			log.Printf("CustomPriceAlerts create: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create alert"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
+
+	case http.MethodDelete:
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+			return
+		}
+		if err := h.db.DeleteCustomPriceAlert(r.Context(), id, subscriberID); err != nil {
+			log.Printf("CustomPriceAlerts delete: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete alert"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}

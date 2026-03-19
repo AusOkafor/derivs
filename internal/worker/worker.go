@@ -294,6 +294,11 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		}
 	}
 
+	// Check custom price alerts against current prices (pro cycle only)
+	if proOnly {
+		go w.checkCustomAlerts(ctx, snapshots)
+	}
+
 	// Store for heat feed (broadcastTopTarget uses engine-processed data only)
 	w.lastSnapMu.Lock()
 	w.lastSnapshots = make(map[string]symbolAlerts, len(snapshots))
@@ -671,6 +676,92 @@ func (w *Worker) backfillOutcomes(ctx context.Context) {
 
 	update(pending15m)
 	update(pending1h)
+}
+
+// checkCustomAlerts checks all pending custom price alerts against current snapshot prices.
+// Called after each pro cycle once the snapshots map is built.
+func (w *Worker) checkCustomAlerts(ctx context.Context, snapshots map[string]symbolAlerts) {
+	pending, err := w.db.GetPendingCustomPriceAlerts(ctx)
+	if err != nil {
+		log.Printf("[custom alerts] GetPendingCustomPriceAlerts: %v", err)
+		return
+	}
+	if len(pending) == 0 {
+		return
+	}
+
+	// Look up chat_id for each subscriber — cache per subscriber_id to avoid repeat DB calls
+	chatIDCache := make(map[string]int64)
+	getChatID := func(subscriberID string) int64 {
+		if id, ok := chatIDCache[subscriberID]; ok {
+			return id
+		}
+		// Look up from active subscribers (already fetched elsewhere in cycle, but re-fetching here is simple)
+		subs, err := w.db.GetActiveSubscribers(ctx)
+		if err != nil {
+			return 0
+		}
+		for _, s := range subs {
+			chatIDCache[s.ID] = s.ChatID
+		}
+		return chatIDCache[subscriberID]
+	}
+
+	for _, ca := range pending {
+		sa, ok := snapshots[ca.Symbol]
+		if !ok {
+			continue
+		}
+		currentPrice := sa.snap.LiquidationMap.CurrentPrice
+		if currentPrice == 0 {
+			continue
+		}
+
+		triggered := false
+		switch ca.Direction {
+		case "above":
+			triggered = currentPrice >= ca.TargetPrice
+		case "below":
+			triggered = currentPrice <= ca.TargetPrice
+		}
+		if !triggered {
+			continue
+		}
+
+		// Mark triggered first (avoid double-send on crash)
+		if err := w.db.MarkCustomPriceAlertTriggered(ctx, ca.ID); err != nil {
+			log.Printf("[custom alerts] MarkTriggered(%s): %v", ca.ID, err)
+			continue
+		}
+
+		chatID := getChatID(ca.SubscriberID)
+		if chatID == 0 {
+			log.Printf("[custom alerts] no chatID for subscriber %s", ca.SubscriberID)
+			continue
+		}
+
+		dirWord := "reached above"
+		if ca.Direction == "below" {
+			dirWord = "dropped below"
+		}
+		noteStr := ""
+		if ca.Note != "" {
+			noteStr = fmt.Sprintf("\n📝 %s", ca.Note)
+		}
+		msg := fmt.Sprintf(
+			"🎯 <b>PRICE ALERT — %s</b>\n\nPrice has %s your target of <b>$%s</b>\nCurrent price: <b>$%s</b>%s\n\n📊 Dashboard → derivlens.io",
+			ca.Symbol,
+			dirWord,
+			formatPriceWorker(ca.TargetPrice),
+			formatPriceWorker(currentPrice),
+			noteStr,
+		)
+		if err := w.notifier.SendMessage(ctx, chatID, msg); err != nil {
+			log.Printf("[custom alerts] SendMessage(chat=%d): %v", chatID, err)
+		} else {
+			log.Printf("[custom alerts] triggered %s %s $%.2f for subscriber %s", ca.Symbol, ca.Direction, ca.TargetPrice, ca.SubscriberID)
+		}
+	}
 }
 
 // formatAlertMessage produces the same clean format as the public channel text alerts.
