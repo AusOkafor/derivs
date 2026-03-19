@@ -23,3 +23,5 @@ main
 .vscode/
 *.DS_Store
 Thumbs.db
+
+screenshots/
