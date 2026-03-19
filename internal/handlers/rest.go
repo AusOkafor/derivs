@@ -1457,3 +1457,63 @@ func isValidDiscordWebhookURL(u string) bool {
 	return strings.HasPrefix(u, "https://discord.com/api/webhooks/") ||
 		strings.HasPrefix(u, "https://discordapp.com/api/webhooks/")
 }
+
+// ─── Dashboard snooze ─────────────────────────────────────────────────────────
+
+// SnoozeHandler handles GET / POST / DELETE /api/snooze
+// All snoozes are applied to "ALL" symbols — a global dashboard-level snooze.
+//
+//	GET    ?username=X                      → {"snoozed": bool, "remaining": "2h30m"}
+//	POST   ?username=X  {"duration":"1h"}   → snooze all alerts for duration
+//	DELETE ?username=X                      → unsnooze
+func (h *Handler) SnoozeHandler(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if err := validateUsername(username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username required"})
+		return
+	}
+
+	subID := h.resolveSubscriberID(r.Context(), 0, username)
+	if subID == "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "subscriber not found"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		active := snoozeGlobal.List(subID)
+		exp, ok := active["ALL"]
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"snoozed": false})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"snoozed":    true,
+			"remaining":  snoozeFormatRemaining(exp),
+			"expires_at": exp.Format(time.RFC3339),
+		})
+
+	case http.MethodPost:
+		var body struct {
+			Duration string `json:"duration"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		d, ok := snoozeParseDuration(body.Duration)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "valid durations: 1h, 4h, 24h"})
+			return
+		}
+		snoozeGlobal.Snooze(subID, "ALL", d)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "snoozed", "duration": body.Duration})
+
+	case http.MethodDelete:
+		snoozeGlobal.Unsnooze(subID, "ALL")
+		writeJSON(w, http.StatusOK, map[string]string{"status": "unsnoozed"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
