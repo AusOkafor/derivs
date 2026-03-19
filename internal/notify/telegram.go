@@ -322,9 +322,18 @@ func (t *TelegramNotifier) PostTopAlert(alert models.Alert, snap models.MarketSn
 	if idx := strings.Index(alert.Message, "\n"); idx > 0 {
 		firstLine = alert.Message[:idx]
 	}
+	sevEmoji := "🔴"
+	sevLabel := "HIGH"
+	if alert.Severity == "medium" {
+		sevEmoji = "🟡"
+		sevLabel = "MEDIUM"
+	} else if alert.Severity == "low" {
+		sevEmoji = "🔵"
+		sevLabel = "LOW"
+	}
 	msg := fmt.Sprintf(
-		"🚨 HIGH ALERT — %s\n%s\n\nFull signal → derivlens.io\nGet alerts → t.me/derivlens_signals",
-		alert.Symbol, firstLine,
+		"%s %s ALERT — %s\n%s\n\nFull signal → derivlens.io\nGet alerts → t.me/derivlens_signals",
+		sevEmoji, sevLabel, alert.Symbol, firstLine,
 	)
 	return t.PostToChannel(msg)
 }
