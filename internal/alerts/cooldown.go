@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+var startupTime = time.Now()
+
+const startupGracePeriod = 2 * time.Minute
+
 type CooldownManager struct {
 	mu        sync.Mutex
 	cooldowns map[string]time.Time
@@ -42,6 +46,10 @@ func (c *CooldownManager) cleanup() {
 }
 
 func (c *CooldownManager) Allow(key string) bool {
+	if time.Since(startupTime) < startupGracePeriod {
+		return false // block all alerts during startup grace period
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
