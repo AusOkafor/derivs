@@ -28,7 +28,7 @@ import (
 func main() {
 	_ = godotenv.Load() // load before Sentry so APP_ENV is available from .env
 	err := sentry.Init(sentry.ClientOptions{
-		Dsn:              "https://ZxPSh1VHUNDDqjhzQiV17bnt@s2296794.eu-fsn-3.betterstackdata.com/2296794",
+		Dsn:              os.Getenv("SENTRY_DSN"),
 		TracesSampleRate: 0.1,
 		Environment:      os.Getenv("APP_ENV"),
 	})
@@ -125,7 +125,10 @@ func corsMiddleware(allowedOrigins string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigins)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Key, X-API-Key-Override")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Key")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/getsentry/sentry-go"
 	"derivs-backend/internal/analysis"
@@ -20,6 +21,18 @@ import (
 	"derivs-backend/internal/signals"
 	"derivs-backend/internal/supabase"
 )
+
+func validateUsername(u string) error {
+	if len(u) == 0 || len(u) > 32 {
+		return fmt.Errorf("invalid username length")
+	}
+	for _, c := range u {
+		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '_' {
+			return fmt.Errorf("invalid username character: %c", c)
+		}
+	}
+	return nil
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -37,6 +50,12 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := r.URL.Query().Get("username")
+	if username != "" {
+		if err := validateUsername(username); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username"})
+			return
+		}
+	}
 
 	tier := ""
 	var userAPIKey, preferredModel string
@@ -57,10 +76,6 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		if settings != nil {
 			userAPIKey = settings.AnthropicAPIKey
 			preferredModel = settings.PreferredModel
-		}
-		// Allow test key override for Settings page "Test Connection"
-		if override := r.Header.Get("X-API-Key-Override"); override != "" {
-			userAPIKey = override
 		}
 	}
 
@@ -644,6 +659,10 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
 		return
 	}
+	if err := validateUsername(username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username"})
+		return
+	}
 	settings, err := h.db.GetUserSettings(r.Context(), username)
 	if err != nil {
 		log.Printf("GetSettings: %v", err)
@@ -763,6 +782,10 @@ func (h *Handler) LemonSqueezyCheckout(w http.ResponseWriter, r *http.Request) {
 	tier := r.URL.Query().Get("tier")
 	if username == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
+		return
+	}
+	if err := validateUsername(username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username"})
 		return
 	}
 	if tier == "" {
@@ -953,6 +976,10 @@ func (h *Handler) GetBillingStatus(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	if username == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
+		return
+	}
+	if err := validateUsername(username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username"})
 		return
 	}
 

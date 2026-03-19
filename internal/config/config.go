@@ -37,7 +37,7 @@ func Load() *Config {
 	cfg := &Config{
 		Port:                getEnvOrDefault("PORT", "8080"),
 		AnthropicAPIKey:     os.Getenv("ANTHROPIC_API_KEY"),
-		AllowedOrigins:     getEnvOrDefault("ALLOWED_ORIGINS", "*"),
+		AllowedOrigins:     getEnvOrDefault("ALLOWED_ORIGINS", "https://derivlens.io"),
 		CacheTTLSeconds:    getEnvAsIntOrDefault("CACHE_TTL_SECONDS", 30),
 		TelegramBotToken:   os.Getenv("TELEGRAM_BOT_TOKEN"),
 		SupabaseURL:        os.Getenv("SUPABASE_URL"),

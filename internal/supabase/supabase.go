@@ -99,7 +99,7 @@ func (c *Client) GetActiveSubscribers(ctx context.Context) ([]Subscriber, error)
 // GetSubscriberChatID returns the chat_id for a given telegram_username.
 // GET {baseURL}/rest/v1/subscribers?telegram_username=eq.{username}&select=chat_id
 func (c *Client) GetSubscriberChatID(ctx context.Context, username string) (int64, error) {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=chat_id", c.baseURL, username)
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=chat_id", c.baseURL, url.QueryEscape(username))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, fmt.Errorf("supabase: build request: %w", err)
@@ -131,7 +131,7 @@ func (c *Client) GetSubscriberChatID(ctx context.Context, username string) (int6
 // UpdateChatID sets the chat_id for a subscriber identified by telegram_username.
 // PATCH {baseURL}/rest/v1/subscribers?telegram_username=eq.{username}
 func (c *Client) UpdateChatID(ctx context.Context, username string, chatID int64) error {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, username)
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, url.QueryEscape(username))
 	body, _ := json.Marshal(map[string]any{"chat_id": chatID})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
@@ -190,7 +190,7 @@ func (c *Client) CreateSubscriber(ctx context.Context, sub Subscriber) error {
 // DeleteSubscriber soft-deletes by setting active=false for a subscriber by username.
 // PATCH {baseURL}/rest/v1/subscribers?telegram_username=eq.{username}
 func (c *Client) DeleteSubscriber(ctx context.Context, username string) error {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, username)
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, url.QueryEscape(username))
 	body, _ := json.Marshal(map[string]any{"active": false})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
@@ -214,7 +214,7 @@ func (c *Client) DeleteSubscriber(ctx context.Context, username string) error {
 
 // UpdateSubscriberTier updates tier and Stripe fields for a subscriber by telegram_username.
 func (c *Client) UpdateSubscriberTier(ctx context.Context, telegramUsername, tier, customerID, subscriptionID, status string) error {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, telegramUsername)
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, url.QueryEscape(telegramUsername))
 	body := map[string]any{"subscription_status": status}
 	if tier != "" {
 		body["tier"] = tier
@@ -252,16 +252,16 @@ func (c *Client) UpdateSubscriberTier(ctx context.Context, telegramUsername, tie
 
 // UpdateSubscriberTierByStripeID updates tier/status for a subscriber found by stripe_customer_id or stripe_subscription_id.
 func (c *Client) UpdateSubscriberTierByStripeID(ctx context.Context, customerID, subscriptionID, tier, status string) error {
-	var url string
+	var reqURL string
 	if customerID != "" {
-		url = fmt.Sprintf("%s/rest/v1/subscribers?stripe_customer_id=eq.%s&select=telegram_username", c.baseURL, customerID)
+		reqURL = fmt.Sprintf("%s/rest/v1/subscribers?stripe_customer_id=eq.%s&select=telegram_username", c.baseURL, url.QueryEscape(customerID))
 	} else if subscriptionID != "" {
-		url = fmt.Sprintf("%s/rest/v1/subscribers?stripe_subscription_id=eq.%s&select=telegram_username", c.baseURL, subscriptionID)
+		reqURL = fmt.Sprintf("%s/rest/v1/subscribers?stripe_subscription_id=eq.%s&select=telegram_username", c.baseURL, url.QueryEscape(subscriptionID))
 	} else {
 		return fmt.Errorf("supabase: need customer_id or subscription_id")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return fmt.Errorf("supabase: build request: %w", err)
 	}
@@ -289,7 +289,7 @@ func (c *Client) UpdateSubscriberTierByStripeID(ctx context.Context, customerID,
 
 // GetSubscriberStripeCustomerID returns the stripe_customer_id for a username, or empty if none.
 func (c *Client) GetSubscriberStripeCustomerID(ctx context.Context, telegramUsername string) (string, error) {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=stripe_customer_id", c.baseURL, telegramUsername)
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=stripe_customer_id", c.baseURL, url.QueryEscape(telegramUsername))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("supabase: build request: %w", err)
@@ -320,7 +320,7 @@ func (c *Client) GetSubscriberStripeCustomerID(ctx context.Context, telegramUser
 
 // GetSubscriberTier returns the tier and status for a username.
 func (c *Client) GetSubscriberTier(ctx context.Context, telegramUsername string) (tier, status string, err error) {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=tier,subscription_status", c.baseURL, telegramUsername)
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=tier,subscription_status", c.baseURL, url.QueryEscape(telegramUsername))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("supabase: build request: %w", err)
@@ -365,7 +365,7 @@ func (c *Client) WasAlertSent(ctx context.Context, subscriberID, alertID string)
 	thirtyMinAgo := time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339)
 	url := fmt.Sprintf(
 		"%s/rest/v1/alert_log?subscriber_id=eq.%s&alert_id=eq.%s&sent_at=gte.%s&select=id",
-		c.baseURL, subscriberID, alertID, thirtyMinAgo,
+		c.baseURL, url.QueryEscape(subscriberID), url.QueryEscape(alertID), url.QueryEscape(thirtyMinAgo),
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -404,7 +404,7 @@ func (c *Client) GetRecentAlertLogs(ctx context.Context, subscriberID string, si
 	sinceStr := since.Format(time.RFC3339)
 	url := fmt.Sprintf(
 		"%s/rest/v1/alert_log?subscriber_id=eq.%s&sent_at=gte.%s&select=alert_id,symbol",
-		c.baseURL, subscriberID, sinceStr,
+		c.baseURL, url.QueryEscape(subscriberID), url.QueryEscape(sinceStr),
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -456,11 +456,11 @@ func (c *Client) LogAlertHistory(ctx context.Context, symbol, alertID, message, 
 // GetAlertHistory returns the last N alerts for a symbol (or all symbols if symbol is empty).
 // GET {baseURL}/rest/v1/alert_history?order=triggered_at.desc&limit=N
 func (c *Client) GetAlertHistory(ctx context.Context, symbol string, limit int) ([]models.AlertHistoryEntry, error) {
-	url := fmt.Sprintf("%s/rest/v1/alert_history?order=triggered_at.desc&limit=%d&select=id,symbol,alert_id,message,severity,triggered_at", c.baseURL, limit)
+	reqURL := fmt.Sprintf("%s/rest/v1/alert_history?order=triggered_at.desc&limit=%d&select=id,symbol,alert_id,message,severity,triggered_at", c.baseURL, limit)
 	if symbol != "" {
-		url += fmt.Sprintf("&symbol=eq.%s", symbol)
+		reqURL += "&symbol=eq." + url.QueryEscape(symbol)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("supabase: build request: %w", err)
 	}
