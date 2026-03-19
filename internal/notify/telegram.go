@@ -235,9 +235,8 @@ func formatUSDForAlert(v float64) string {
 	return fmt.Sprintf("$%.0f", v)
 }
 
-// SendFormattedAlert sends a richly formatted text alert (no image) using HTML.
-// Clean formatted text looks better than blurry images on all devices.
-func (t *TelegramNotifier) SendFormattedAlert(ctx context.Context, chatID string, data cards.AlertCardData) error {
+// buildFormattedAlertText returns the HTML text for a formatted alert card.
+func buildFormattedAlertText(data cards.AlertCardData) string {
 	sevEmoji := "🔴"
 	if data.Severity == "MEDIUM" {
 		sevEmoji = "🟡"
@@ -246,7 +245,7 @@ func (t *TelegramNotifier) SendFormattedAlert(ctx context.Context, chatID string
 	if data.ClusterPrice < data.Price {
 		direction = "⬇️ Downward sweep likely"
 	}
-	message := fmt.Sprintf(
+	return fmt.Sprintf(
 		"%s <b>%s — Liquidity Sweep</b>\n\n"+
 			"💰 <b>Price:</b> %s\n"+
 			"🎯 <b>Target:</b> %s\n"+
@@ -271,7 +270,13 @@ func (t *TelegramNotifier) SendFormattedAlert(ctx context.Context, chatID string
 		data.Funding*100,
 		direction,
 	)
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.botToken)
+}
+
+// SendFormattedAlert sends a richly formatted text alert (no image) using HTML.
+// Used for public channel posts (no snooze button). For subscriber DMs use SendAlertCardToUser.
+func (t *TelegramNotifier) SendFormattedAlert(ctx context.Context, chatID string, data cards.AlertCardData) error {
+	message := buildFormattedAlertText(data)
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.botToken)
 	payload := map[string]interface{}{
 		"chat_id":                  chatID,
 		"text":                     message,
@@ -282,7 +287,7 @@ func (t *TelegramNotifier) SendFormattedAlert(ctx context.Context, chatID string
 	if err != nil {
 		return fmt.Errorf("telegram: marshal formatted alert: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("telegram: build formatted alert request: %w", err)
 	}
@@ -298,18 +303,77 @@ func (t *TelegramNotifier) SendFormattedAlert(ctx context.Context, chatID string
 	return nil
 }
 
-// SendAlertCardToUser sends formatted alert text (no image) to a specific user's chat.
+// sendMessageWithKeyboard sends an HTML message to chatIDStr with an inline keyboard.
+func (t *TelegramNotifier) sendMessageWithKeyboard(ctx context.Context, chatIDStr, text string, keyboard [][]map[string]string) error {
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.botToken)
+	payload := map[string]any{
+		"chat_id":                  chatIDStr,
+		"text":                     text,
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": true,
+		"reply_markup":             map[string]any{"inline_keyboard": keyboard},
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("telegram: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("telegram: sendMessageWithKeyboard: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram: sendMessageWithKeyboard: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// AnswerCallbackQuery acknowledges a Telegram inline button press (required within 10s).
+func (t *TelegramNotifier) AnswerCallbackQuery(callbackQueryID, text string) error {
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery", t.botToken)
+	payload := map[string]any{
+		"callback_query_id": callbackQueryID,
+		"text":              text,
+		"show_alert":        false,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("telegram: AnswerCallbackQuery: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("telegram: AnswerCallbackQuery: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// snoozeKeyboard builds the inline keyboard row attached to alert messages.
+func snoozeKeyboard(symbol string) [][]map[string]string {
+	return [][]map[string]string{
+		{
+			{"text": "😴 Snooze 1h", "callback_data": fmt.Sprintf("snooze:%s:1h", symbol)},
+			{"text": "😴 4h", "callback_data": fmt.Sprintf("snooze:%s:4h", symbol)},
+		},
+	}
+}
+
+// SendAlertCardToUser sends formatted alert text to a specific user's chat with a snooze button.
 func (t *TelegramNotifier) SendAlertCardToUser(ctx context.Context, chatID int64, alert models.Alert, snap models.MarketSnapshot, sigs models.MarketSignals) error {
+	chatIDStr := strconv.FormatInt(chatID, 10)
+	keyboard := snoozeKeyboard(alert.Symbol)
 	data := buildAlertCardData(alert, snap, sigs)
 	if data != nil {
-		if err := t.SendFormattedAlert(ctx, strconv.FormatInt(chatID, 10), *data); err != nil {
-			return err
-		}
-		return nil
+		msg := buildFormattedAlertText(*data)
+		return t.sendMessageWithKeyboard(ctx, chatIDStr, msg, keyboard)
 	}
 	sev := severityEmoji(alert.Severity)
 	msg := fmt.Sprintf("%s %s ALERT — %s\n%s\n\nFull dashboard → derivlens.io", sev, strings.ToUpper(alert.Severity), alert.Symbol, alert.Message)
-	return t.SendMessage(ctx, chatID, msg)
+	return t.sendMessageWithKeyboard(ctx, chatIDStr, msg, keyboard)
 }
 
 // PostTopAlert posts a HIGH severity alert to the public channel as formatted text (no image).

@@ -19,8 +19,18 @@ import (
 	"derivs-backend/internal/billing"
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/signals"
+	"derivs-backend/internal/snooze"
 	"derivs-backend/internal/supabase"
 )
+
+// snoozeGlobal is a package-level alias for cleaner handler code.
+var snoozeGlobal = snooze.Global
+
+// snoozeParseDuration wraps snooze.ParseDuration.
+func snoozeParseDuration(s string) (time.Duration, bool) { return snooze.ParseDuration(s) }
+
+// snoozeFormatRemaining wraps snooze.FormatRemaining.
+func snoozeFormatRemaining(t time.Time) string { return snooze.FormatRemaining(t) }
 
 func validateUsername(u string) error {
 	if len(u) == 0 || len(u) > 32 {
@@ -1007,13 +1017,25 @@ type telegramUpdate struct {
 		} `json:"from"`
 		Text string `json:"text"`
 	} `json:"message"`
+	CallbackQuery struct {
+		ID   string `json:"id"`
+		From struct {
+			Username string `json:"username"`
+		} `json:"from"`
+		Message struct {
+			Chat struct {
+				ID int64 `json:"id"`
+			} `json:"chat"`
+		} `json:"message"`
+		Data string `json:"data"` // e.g. "snooze:BTC:1h"
+	} `json:"callback_query"`
 }
 
 // TelegramWebhook handles POST /api/webhook/telegram.
 // Telegram requires a 200 response for every update, even on errors.
 func (h *Handler) TelegramWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusOK) // always 200 to Telegram
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
@@ -1024,43 +1046,156 @@ func (h *Handler) TelegramWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := update.Message
-	if msg.Text != "/start" {
+	ctx := r.Context()
+
+	// Handle inline button callbacks (snooze button pressed on an alert message)
+	if cq := update.CallbackQuery; cq.ID != "" {
+		h.handleSnoozeCallback(ctx, cq.ID, cq.Message.Chat.ID, cq.From.Username, cq.Data)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	ctx := r.Context()
+	msg := update.Message
 	chatID := msg.Chat.ID
 	username := msg.From.Username
+	text := strings.TrimSpace(msg.Text)
 
-	if username != "" {
-		if err := h.db.UpdateChatID(ctx, username, chatID); err != nil {
-			log.Printf("telegram webhook: UpdateChatID(%s, %d): %v", username, chatID, err)
+	switch {
+	case text == "/start":
+		if username != "" {
+			if err := h.db.UpdateChatID(ctx, username, chatID); err != nil {
+				log.Printf("telegram webhook: UpdateChatID(%s, %d): %v", username, chatID, err)
+			}
 		}
-	}
+		dashboardLink := fmt.Sprintf("https://derivlens.io/dashboard?u=%s", username)
+		if username == "" {
+			dashboardLink = fmt.Sprintf("https://derivlens.io/dashboard?uid=%d", chatID)
+		}
+		welcomeMsg := fmt.Sprintf(
+			"👋 Welcome to DerivLens!\n\n📊 <b>Your dashboard:</b>\n<a href=\"%s\">%s</a>\n\n"+
+				"⭐ Bookmark this link — it keeps your account connected on any device.\n\n"+
+				"Your alerts are now active. You'll receive notifications here automatically.\n\n"+
+				"💤 <b>Snooze commands:</b>\n"+
+				"/snooze BTC 1h — pause BTC alerts for 1h\n"+
+				"/snooze all 4h — pause all alerts for 4h\n"+
+				"/unsnooze BTC — resume BTC alerts\n"+
+				"/snoozes — list active snoozes",
+			dashboardLink, dashboardLink,
+		)
+		if err := h.notifier.SendMessage(ctx, chatID, welcomeMsg); err != nil {
+			log.Printf("telegram webhook: SendMessage(%d): %v", chatID, err)
+		}
 
-	dashboardLink := fmt.Sprintf("https://derivlens.io/dashboard?u=%s", username)
-	if username == "" {
-		dashboardLink = fmt.Sprintf("https://derivlens.io/dashboard?uid=%d", chatID)
-	}
+	case strings.HasPrefix(text, "/snooze "):
+		h.handleSnoozeCommand(ctx, chatID, username, strings.TrimPrefix(text, "/snooze "))
 
-	welcomeMsg := fmt.Sprintf(
-		`👋 Welcome to DerivLens!
+	case strings.HasPrefix(text, "/unsnooze"):
+		h.handleUnsnoozeCommand(ctx, chatID, username, strings.TrimPrefix(text, "/unsnooze"))
 
-📊 <b>Your dashboard:</b>
-<a href="%s">%s</a>
-
-⭐ Bookmark this link — it keeps your account connected on any device.
-
-Your alerts are now active. You'll receive notifications here automatically.`,
-		dashboardLink, dashboardLink,
-	)
-	if err := h.notifier.SendMessage(ctx, chatID, welcomeMsg); err != nil {
-		log.Printf("telegram webhook: SendMessage(%d): %v", chatID, err)
+	case text == "/snoozes":
+		h.handleSnoozeListCommand(ctx, chatID, username)
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleSnoozeCommand parses "/snooze BTC 1h" args and applies the snooze.
+func (h *Handler) handleSnoozeCommand(ctx context.Context, chatID int64, username, args string) {
+	parts := strings.Fields(args)
+	if len(parts) < 2 {
+		h.notifier.SendMessage(ctx, chatID, "Usage: /snooze BTC 1h\nDurations: 30m · 1h · 4h · 24h\nUse 'all' to snooze every symbol.") //nolint:errcheck
+		return
+	}
+	symbol := strings.ToUpper(parts[0])
+	d, ok := snoozeParseDuration(parts[1])
+	if !ok {
+		h.notifier.SendMessage(ctx, chatID, "Valid durations: 30m · 1h · 4h · 24h") //nolint:errcheck
+		return
+	}
+	subID := h.resolveSubscriberID(ctx, chatID, username)
+	if subID == "" {
+		h.notifier.SendMessage(ctx, chatID, "You're not subscribed. Send /start to register.") //nolint:errcheck
+		return
+	}
+	snoozeGlobal.Snooze(subID, symbol, d)
+	label := symbol
+	if symbol == "ALL" {
+		label = "all symbols"
+	}
+	h.notifier.SendMessage(ctx, chatID, fmt.Sprintf("😴 %s alerts snoozed for %s.\nSend /unsnooze %s to resume early.", label, parts[1], symbol)) //nolint:errcheck
+}
+
+// handleUnsnoozeCommand cancels a snooze for a symbol.
+func (h *Handler) handleUnsnoozeCommand(ctx context.Context, chatID int64, username, args string) {
+	symbol := strings.ToUpper(strings.TrimSpace(args))
+	if symbol == "" {
+		h.notifier.SendMessage(ctx, chatID, "Usage: /unsnooze BTC") //nolint:errcheck
+		return
+	}
+	subID := h.resolveSubscriberID(ctx, chatID, username)
+	if subID == "" {
+		h.notifier.SendMessage(ctx, chatID, "You're not subscribed.") //nolint:errcheck
+		return
+	}
+	snoozeGlobal.Unsnooze(subID, symbol)
+	h.notifier.SendMessage(ctx, chatID, fmt.Sprintf("✅ %s alerts resumed.", symbol)) //nolint:errcheck
+}
+
+// handleSnoozeListCommand shows all active snoozes.
+func (h *Handler) handleSnoozeListCommand(ctx context.Context, chatID int64, username string) {
+	subID := h.resolveSubscriberID(ctx, chatID, username)
+	if subID == "" {
+		h.notifier.SendMessage(ctx, chatID, "You're not subscribed.") //nolint:errcheck
+		return
+	}
+	active := snoozeGlobal.List(subID)
+	if len(active) == 0 {
+		h.notifier.SendMessage(ctx, chatID, "No active snoozes. All alerts are enabled.") //nolint:errcheck
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString("😴 <b>Active snoozes:</b>\n")
+	for sym, exp := range active {
+		sb.WriteString(fmt.Sprintf("• %s — %s remaining\n", sym, snoozeFormatRemaining(exp)))
+	}
+	sb.WriteString("\nSend /unsnooze SYMBOL to resume early.")
+	h.notifier.SendMessage(ctx, chatID, sb.String()) //nolint:errcheck
+}
+
+// handleSnoozeCallback handles the inline "😴 Snooze 1h" button press.
+func (h *Handler) handleSnoozeCallback(ctx context.Context, callbackQueryID string, chatID int64, username, data string) {
+	// data format: "snooze:BTC:1h"
+	parts := strings.Split(data, ":")
+	if len(parts) != 3 || parts[0] != "snooze" {
+		return
+	}
+	symbol := strings.ToUpper(parts[1])
+	d, ok := snoozeParseDuration(parts[2])
+	if !ok {
+		return
+	}
+	subID := h.resolveSubscriberID(ctx, chatID, username)
+	if subID == "" {
+		h.notifier.AnswerCallbackQuery(callbackQueryID, "Subscribe first to use snooze.") //nolint:errcheck
+		return
+	}
+	snoozeGlobal.Snooze(subID, symbol, d)
+	h.notifier.AnswerCallbackQuery(callbackQueryID, fmt.Sprintf("😴 %s alerts snoozed for %s", symbol, parts[2])) //nolint:errcheck
+}
+
+// resolveSubscriberID returns the subscriber UUID by username (preferred) or chat_id fallback.
+func (h *Handler) resolveSubscriberID(ctx context.Context, chatID int64, username string) string {
+	if username != "" {
+		id, _, err := h.db.GetSubscriberIDByUsername(ctx, username)
+		if err == nil {
+			return id
+		}
+	}
+	id, err := h.db.GetSubscriberIDByChatID(ctx, chatID)
+	if err != nil {
+		return ""
+	}
+	return id
 }
 
 // ─── Market status ────────────────────────────────────────────────────────────

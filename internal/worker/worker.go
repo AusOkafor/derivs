@@ -21,6 +21,7 @@ import (
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/notify"
 	"derivs-backend/internal/signals"
+	"derivs-backend/internal/snooze"
 	"derivs-backend/internal/supabase"
 )
 
@@ -397,6 +398,11 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 
 			if !alerts.IsSafeToSend(ca.alert) {
 				log.Printf("[guard] BLOCKED before send: %s cluster=%.0f dist=%.4f", ca.alert.Symbol, ca.alert.ClusterSize, ca.alert.Distance)
+				continue
+			}
+
+			if snooze.Global.IsSnoozed(sub.ID, ca.sym) {
+				log.Printf("[snooze] skipping %s %s for @%s — snoozed", ca.sym, ca.alert.ID, sub.TelegramUsername)
 				continue
 			}
 

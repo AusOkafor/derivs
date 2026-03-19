@@ -681,6 +681,32 @@ func (c *Client) AddToWaitlist(ctx context.Context, email, tier, username string
 	return nil
 }
 
+// GetSubscriberIDByChatID returns the subscriber UUID for the given Telegram chat ID.
+// Used to look up a subscriber when only their chat ID is known (e.g. inline button callbacks).
+func (c *Client) GetSubscriberIDByChatID(ctx context.Context, chatID int64) (string, error) {
+	reqURL := fmt.Sprintf("%s/rest/v1/subscribers?chat_id=eq.%d&active=eq.true&select=id&limit=1", c.baseURL, chatID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("supabase: GetSubscriberIDByChatID: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("supabase: GetSubscriberIDByChatID: status %d", resp.StatusCode)
+	}
+	var rows []struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil || len(rows) == 0 {
+		return "", fmt.Errorf("supabase: no subscriber found for chat_id %d", chatID)
+	}
+	return rows[0].ID, nil
+}
+
 // GetSubscriberIDByUsername returns the subscriber UUID for the given Telegram username.
 func (c *Client) GetSubscriberIDByUsername(ctx context.Context, username string) (string, string, error) {
 	reqURL := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=id,tier&active=eq.true", c.baseURL, url.QueryEscape(username))
