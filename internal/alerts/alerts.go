@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -96,8 +97,8 @@ const (
 	minOIForRegimeAlert   = 100_000_000 // $100M minimum OI for regime/OI alerts (excludes small caps)
 )
 
-func zoneSeverity(zone LiquidationZone, distance float64) string {
-	if zone.TotalUSD < MinClusterSize {
+func zoneSeverity(zone LiquidationZone, distance float64, symbol string) string {
+	if zone.TotalUSD < GetMinClusterSize(symbol) {
 		return ""
 	}
 	if zone.TotalUSD >= highSeverityMinSize && distance <= 1.5 {
@@ -259,7 +260,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			continue // skip — cluster at current price, no actionable distance
 		}
 
-		severity := zoneSeverity(zone, distanceToZone)
+		severity := zoneSeverity(zone, distanceToZone, symbol)
 		if severity == "" {
 			continue
 		}
@@ -315,9 +316,18 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			whaleTag,
 		)
 
-		sweepProb := 0
-		if sigs.LiquidationMagnet != nil {
-			sweepProb = sigs.LiquidationMagnet.Probability
+		zoneProbability := 50
+		if distanceToZone < 0.5 {
+			zoneProbability += 20
+		}
+		if distanceToZone < 0.2 {
+			zoneProbability += 15
+		}
+		if zone.TotalUSD > GetMinClusterSize(symbol)*2 {
+			zoneProbability += 15
+		}
+		if zoneProbability > 95 {
+			zoneProbability = 95
 		}
 		a := models.Alert{
 			ID:           zoneID,
@@ -328,7 +338,15 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 			ClusterPrice: (zone.MinPrice + zone.MaxPrice) / 2,
 			ClusterSize:  zone.TotalUSD,
 			Distance:     distanceToZone / 100,
-			Probability:  sweepProb,
+			Probability:  zoneProbability,
+		}
+		if a.ClusterSize > 0 && a.ClusterSize < GetMinClusterSize(symbol) {
+			log.Printf("[detect] HARD BLOCK %s: $%.0f below $%.0f min", a.ID, a.ClusterSize, GetMinClusterSize(symbol))
+			continue
+		}
+		if a.ClusterSize > 0 && a.Distance < 0.001 {
+			log.Printf("[detect] HARD BLOCK %s: distance %.4f", a.ID, a.Distance)
+			continue
 		}
 		out = append(out, a)
 	}
