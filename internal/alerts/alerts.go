@@ -165,7 +165,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// ── Rule 0: Liquidation burst (real-time from Binance) ─────────────────────
 	if snap.RecentLiquidations != nil && snap.RecentLiquidations.BurstDetected {
 		add("liq-burst",
-			fmt.Sprintf("🚨 Liquidation burst detected — $%.1fM liquidated in 30 seconds\nCascade may be underway",
+			fmt.Sprintf("🚨 Liquidation burst detected — $%.1fM liquidated in 30 seconds\nCascade in progress — expect immediate volatility",
 				snap.RecentLiquidations.BurstSizeUSD/1_000_000),
 			"high",
 		)
@@ -175,13 +175,13 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	rate := snap.FundingRate.Rate
 	if rate > 0.0005 {
 		add("funding-elevated",
-			fmt.Sprintf("Funding rate spiking at +%.4f%% (APR %.1f%%) — longs paying heavily, overleveraged market. Watch for long squeeze if price stalls.",
+			fmt.Sprintf("Funding rate at +%.4f%% (APR %.1f%%) — longs are paying heavily. Market is overleveraged long. Long squeeze risk is elevated — any reversal flushes crowded longs.",
 				rate*100, rate*100*3*365),
 			"high",
 		)
 	} else if rate < -0.0005 {
 		add("funding-elevated",
-			fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure. Watch for short squeeze rally.",
+			fmt.Sprintf("Funding rate at %.4f%% — shorts are paying longs. Negative funding this extreme signals overcrowded shorts. Short squeeze risk is elevated.",
 				rate*100),
 			"high",
 		)
@@ -195,7 +195,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	if oi1h > 2.0 {
 		a := models.Alert{
 			ID: fmt.Sprintf("%s-oi-spike-1h", snap.Symbol), Symbol: snap.Symbol,
-			Message:   fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Watch for volatile directional move.", oi1h),
+			Message:   fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Breakout or breakdown is imminent as positions build pressure.", oi1h),
 			Severity:  "high", Timestamp: now, Value: oi1h, RuleKey: "oi_spike_1h",
 		}
 		out = append(out, a)
@@ -213,14 +213,14 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	if oi24h > 5.0 {
 		a := models.Alert{
 			ID: fmt.Sprintf("%s-oi-divergence-24h", snap.Symbol), Symbol: snap.Symbol,
-			Message:   fmt.Sprintf("OI up %.1f%% in 24h — new money entering fast. Watch for volatile directional move as positions build.", oi24h),
+			Message:   fmt.Sprintf("OI up %.1f%% in 24h — sustained inflow of new money. Directional pressure building — a sharp move is likely as positions stack up.", oi24h),
 			Severity:  "medium", Timestamp: now, Value: oi24h, RuleKey: "oi_divergence_24h",
 		}
 		out = append(out, a)
 	} else if oi24h < -5.0 {
 		a := models.Alert{
 			ID: fmt.Sprintf("%s-oi-divergence-24h", snap.Symbol), Symbol: snap.Symbol,
-			Message:   fmt.Sprintf("Open interest down %.1f%% in 24h — leverage unwinding detected. Market deleveraging, expect lower volatility.", math.Abs(oi24h)),
+			Message:   fmt.Sprintf("OI down %.1f%% in 24h — leverage unwinding. Positions are being closed out, reducing cascade risk but signaling weakening conviction in the trend.", math.Abs(oi24h)),
 			Severity:  "medium", Timestamp: now, Value: math.Abs(oi24h), RuleKey: "oi_divergence_24h",
 		}
 		out = append(out, a)
@@ -241,13 +241,13 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		case avgLong > 72.0:
 			out = append(out, models.Alert{
 				ID: fmt.Sprintf("%s-long-bias", snap.Symbol), Symbol: snap.Symbol,
-				Message:  fmt.Sprintf("%.1f%% of traders are long across exchanges — crowded trade. High liquidation risk below current price if bulls lose control.", avgLong),
+				Message:  fmt.Sprintf("%.1f%% of traders are long — crowded trade. Any drop accelerates as longs become the exit liquidity. Liquidation risk is high below current price.", avgLong),
 				Severity: "medium", Timestamp: now, Value: avgLong, RuleKey: "long_bias",
 			})
 		case avgLong < 28.0:
 			out = append(out, models.Alert{
 				ID: fmt.Sprintf("%s-short-bias", snap.Symbol), Symbol: snap.Symbol,
-				Message:  fmt.Sprintf("%.1f%% of traders are short — crowded short. Watch for short squeeze, especially on any positive catalyst.", shortPct),
+				Message:  fmt.Sprintf("%.1f%% of traders are short — crowded short. Short squeeze risk is elevated. Any upside catalyst forces covering and accelerates the move up.", shortPct),
 				Severity: "medium", Timestamp: now, Value: shortPct, RuleKey: "short_bias",
 			})
 		}
@@ -370,7 +370,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:    snap.Symbol,
-			Message:   fmt.Sprintf("Short squeeze probability at %d%% — negative funding, shorts overcrowded, liquidation clusters above price. Watch for rapid upward move.", sigs.ShortSqueezeProbability),
+			Message:   fmt.Sprintf("Short squeeze probability at %d%% — negative funding, shorts overcrowded, liquidation clusters above price. Upside move is likely to accelerate as shorts are forced to cover.", sigs.ShortSqueezeProbability),
 			Severity:  "high",
 			Timestamp: now,
 		}
@@ -383,7 +383,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
 			Symbol:    snap.Symbol,
-			Message:   fmt.Sprintf("Long squeeze probability at %d%% — elevated funding, longs overcrowded, liquidation clusters below price. Watch for rapid downward move.", sigs.LongSqueezeProbability),
+			Message:   fmt.Sprintf("Long squeeze probability at %d%% — elevated funding, longs overcrowded, liquidation clusters below price. Downside move is likely to accelerate as longs are forced to liquidate.", sigs.LongSqueezeProbability),
 			Severity:  "high",
 			Timestamp: now,
 		}
@@ -439,7 +439,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-regime-liquidation", snap.Symbol),
 			Symbol:    snap.Symbol,
-			Message:   "Market regime: Liquidation Event detected. OI dropping sharply — forced position closures underway. Potential local top/bottom forming.",
+			Message:   "Market regime: Liquidation Event detected. OI dropping sharply — forced closures underway. High probability of a local reversal as leveraged positions are wiped out.",
 			Severity:  "high",
 			Timestamp: now,
 		}
