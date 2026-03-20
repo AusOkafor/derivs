@@ -706,21 +706,24 @@ func (w *Worker) checkCustomAlerts(ctx context.Context, snapshots map[string]sym
 		return
 	}
 
-	// Look up chat_id for each subscriber — cache per subscriber_id to avoid repeat DB calls
-	chatIDCache := make(map[string]int64)
-	getChatID := func(subscriberID string) int64 {
-		if id, ok := chatIDCache[subscriberID]; ok {
-			return id
+	// Look up chat_id and discord webhook for each subscriber — cached to avoid repeat DB calls
+	type subInfo struct {
+		chatID     int64
+		discordURL string
+	}
+	subCache := make(map[string]subInfo)
+	getSubInfo := func(subscriberID string) subInfo {
+		if info, ok := subCache[subscriberID]; ok {
+			return info
 		}
-		// Look up from active subscribers (already fetched elsewhere in cycle, but re-fetching here is simple)
 		subs, err := w.db.GetActiveSubscribers(ctx)
 		if err != nil {
-			return 0
+			return subInfo{}
 		}
 		for _, s := range subs {
-			chatIDCache[s.ID] = s.ChatID
+			subCache[s.ID] = subInfo{chatID: s.ChatID, discordURL: s.DiscordWebhookURL}
 		}
-		return chatIDCache[subscriberID]
+		return subCache[subscriberID]
 	}
 
 	for _, ca := range pending {
@@ -750,8 +753,8 @@ func (w *Worker) checkCustomAlerts(ctx context.Context, snapshots map[string]sym
 			continue
 		}
 
-		chatID := getChatID(ca.SubscriberID)
-		if chatID == 0 {
+		info := getSubInfo(ca.SubscriberID)
+		if info.chatID == 0 {
 			log.Printf("[custom alerts] no chatID for subscriber %s", ca.SubscriberID)
 			continue
 		}
@@ -772,10 +775,21 @@ func (w *Worker) checkCustomAlerts(ctx context.Context, snapshots map[string]sym
 			formatPriceWorker(currentPrice),
 			noteStr,
 		)
-		if err := w.notifier.SendMessage(ctx, chatID, msg); err != nil {
-			log.Printf("[custom alerts] SendMessage(chat=%d): %v", chatID, err)
+		if err := w.notifier.SendMessage(ctx, info.chatID, msg); err != nil {
+			log.Printf("[custom alerts] SendMessage(chat=%d): %v", info.chatID, err)
 		} else {
 			log.Printf("[custom alerts] triggered %s %s $%.2f for subscriber %s", ca.Symbol, ca.Direction, ca.TargetPrice, ca.SubscriberID)
+		}
+
+		// Fire Discord if subscriber has a webhook configured
+		if info.discordURL != "" {
+			discordMsg := fmt.Sprintf("🎯 **PRICE ALERT — %s**\n\nPrice has %s your target of **$%s**\nCurrent price: **$%s**%s\n\n📊 Dashboard → derivlens.io",
+				ca.Symbol, dirWord, formatPriceWorker(ca.TargetPrice), formatPriceWorker(currentPrice), noteStr)
+			go func(hookURL, content string) {
+				if err := notify.SendDiscordMessage(context.Background(), hookURL, content); err != nil {
+					log.Printf("[custom alerts] discord send: %v", err)
+				}
+			}(info.discordURL, discordMsg)
 		}
 	}
 }

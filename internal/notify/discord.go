@@ -85,6 +85,51 @@ func SendDiscordAlert(ctx context.Context, webhookURL string, alert models.Alert
 	return nil
 }
 
+// SendDiscordMessage posts a plain markdown message to a Discord webhook as a simple embed.
+// Used for custom price alerts and other non-Alert-struct notifications.
+func SendDiscordMessage(ctx context.Context, webhookURL, content string) error {
+	if webhookURL == "" {
+		return nil
+	}
+
+	embed := map[string]any{
+		"description": content,
+		"color":       0x3498DB, // blue — neutral, not severity-coded
+		"footer": map[string]string{
+			"text": "DerivLens • derivlens.io",
+		},
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	payload := map[string]any{
+		"username": "DerivLens",
+		"embeds":   []map[string]any{embed},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("discord: marshal: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("discord: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("discord: send: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("discord: webhook status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // IsValidDiscordWebhookURL returns true for discord.com and discordapp.com webhook URLs.
 func IsValidDiscordWebhookURL(u string) bool {
 	return strings.HasPrefix(u, "https://discord.com/api/webhooks/") ||
