@@ -17,7 +17,7 @@ func (e *Engine) Analyze(snap models.MarketSnapshot, momentum float64) models.Ma
 	sig := models.MarketSignals{Symbol: snap.Symbol}
 
 	// 1. OI Trend (price + OI correlation)
-	sig.OITrend = detectOITrend(snap)
+	sig.OITrend = detectOITrend(snap, momentum)
 
 	// 2. Liquidation Magnet (with momentum filter)
 	sig.LiquidationMagnet = detectLiquidationMagnet(snap, momentum)
@@ -58,9 +58,11 @@ func (e *Engine) Analyze(snap models.MarketSnapshot, momentum float64) models.Ma
 	return sig
 }
 
-func detectOITrend(snap models.MarketSnapshot) models.OITrend {
+func detectOITrend(snap models.MarketSnapshot, momentum float64) models.OITrend {
 	oiRising := snap.OpenInterest.OIChange1h > 0
-	priceRising := snap.FundingRate.Rate > 0
+	// Use price momentum — not funding rate (funding is lagging and can stay positive
+	// while price is already falling, producing wrong OI trend labels).
+	priceRising := momentum > 0
 
 	switch {
 	case priceRising && oiRising:
@@ -901,11 +903,13 @@ func calcLiquidityPressure(snap models.MarketSnapshot, sig models.MarketSignals)
 		score -= 5
 	}
 
-	// Factor 3 — Stop hunt direction (+/-20 max)
+	// Factor 3 — Stop hunt direction (+/-14 max)
+	// Use Confidence (independent signal quality, 0-70) not side probs (which sum to 100
+	// and would always contribute ≥10 pts regardless of actual hunt likelihood).
 	if sig.StopHunt.TargetSide == "shorts" {
-		score += int(float64(sig.StopHunt.ShortSideProb) * 0.2)
+		score += int(float64(sig.StopHunt.Confidence) * 0.2)
 	} else if sig.StopHunt.TargetSide == "longs" {
-		score -= int(float64(sig.StopHunt.LongSideProb) * 0.2)
+		score -= int(float64(sig.StopHunt.Confidence) * 0.2)
 	}
 
 	// Factor 4 — Short/long squeeze probability (+/-15 max)
