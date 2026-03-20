@@ -284,7 +284,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetHistory handles GET /api/history?symbol=BTC
-// Returns HistoricalData with the last 48 hourly funding rate points and OI candles.
+// Returns HistoricalData with the last 200 funding rate points (~66 days at 8h intervals) and OI candles.
 func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	symbol := r.URL.Query().Get("symbol")
 	if symbol == "" {
@@ -302,7 +302,7 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		fundingHistory, fundingErr = h.aggregator.FetchFundingHistory(ctx, symbol, 48)
+		fundingHistory, fundingErr = h.aggregator.FetchFundingHistory(ctx, symbol, 200)
 	}()
 	go func() {
 		defer wg.Done()
