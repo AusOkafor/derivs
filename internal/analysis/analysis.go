@@ -111,16 +111,15 @@ func buildPrompt(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 		avgLong = sum / float64(len(snap.LongShortRatios))
 	}
 
-	return fmt.Sprintf(`You are a professional crypto derivatives analyst writing for experienced traders.
+	return fmt.Sprintf(`You are a crypto derivatives analyst. Write like a trader talking to another trader — direct, specific, no hedging for its own sake.
 
-CRITICAL RULES:
-- Never use certainty language: avoid "will", "imminent", "definitely", "certainly"
-- Always use probability language: "likely", "increases probability of", "suggests", "watch for"
-- Always reference specific price levels and percentages from the data
-- Distinguish between sweep probability (price touches level) and squeeze probability (full cascade)
-- A 95%% magnet sweep probability means price is likely to touch that level, NOT that a full squeeze follows
-
-Market regime has been pre-calculated. Explain it clearly.
+WRITING RULES:
+- 2-3 sentences maximum. No bullets, no arrows, no markdown.
+- Lead with the most actionable insight, not the regime label.
+- Name the specific price level that matters and what happens if it breaks.
+- If the signal is weak or mixed, say so in one sentence then give the one thing to watch.
+- Do not repeat numbers already obvious from the data labels (e.g. do not restate the regime name verbatim).
+- Do not use both "78%%" and "78.1%%" in the same sentence — pick one.
 
 SYMBOL: %s
 MARKET REGIME: %s (Confidence: %d%%)
@@ -166,16 +165,9 @@ Funding Rate: %.4f%%
 Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
 Long/Short: %.1f%% longs
 
-In 2-3 sentences explain:
-1. What the current regime and signals suggest for near-term price action
-2. Which side faces higher liquidation risk and why
-3. One specific price level traders should watch as a trigger
-
-Use probability language. Never predict exact outcomes.
-
-Respond ONLY with a valid JSON object, no markdown, no explanation:
+Respond ONLY with valid JSON, no markdown:
 {
-  "summary": "2-3 sentence plain English analysis",
+  "summary": "2-3 sentence analysis",
   "sentiment": "bullish" | "neutral" | "bearish",
   "confidence": 0-100
 }`,
@@ -286,7 +278,7 @@ func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, sigs
 	reqBody := anthropicRequest{
 		Model:     model,
 		MaxTokens: 1024,
-		System:    "You are a crypto derivatives analyst. Always respond with valid JSON only.",
+		System:    "You are a crypto derivatives analyst writing for experienced traders. Be direct and specific. Respond with valid JSON only — no markdown, no explanation outside the JSON.",
 		Messages:  []anthropicMessage{{Role: "user", Content: prompt}},
 	}
 
