@@ -875,32 +875,44 @@ func formatUSDWorker(usd float64) string {
 }
 
 // shouldSendAlert checks whether a subscriber's rules JSONB permits a given alert.
-// Rules is expected to be an object whose keys map to bool, e.g.:
+// Rules supports both boolean on/off flags and numeric thresholds:
 //
-//	{"funding_spike": true, "oi_divergence": false, "liquidation_cluster": true}
+//	{"funding_spike": true, "long_bias": true, "long_bias_threshold": 65.0}
 //
-// An alert passes if its matching rule key is absent (nil = allow) or true.
+// An alert passes if its rule key is absent or true, and its Value meets any configured threshold.
 func (w *Worker) shouldSendAlert(rules json.RawMessage, alert models.Alert) bool {
 	if len(rules) == 0 {
-		return true // no rules configured → send everything
+		return true
 	}
 
-	var ruleMap map[string]bool
+	var ruleMap map[string]interface{}
 	if err := json.Unmarshal(rules, &ruleMap); err != nil {
-		// Unparseable rules — fail open so the subscriber still receives alerts.
-		return true
+		return true // fail open
 	}
 
 	ruleKey := alertRuleKey(alert.Message)
 	if ruleKey == "" {
-		return true // unrecognised alert type → send it
+		return true
 	}
 
-	enabled, exists := ruleMap[ruleKey]
-	if !exists {
-		return true // rule not configured → allow by default
+	// Check boolean on/off flag
+	if raw, ok := ruleMap[ruleKey]; ok {
+		if b, ok := raw.(bool); ok && !b {
+			return false // rule explicitly disabled
+		}
 	}
-	return enabled
+
+	// Check numeric threshold — alert.Value must be >= threshold to send
+	if alert.Value > 0 {
+		threshKey := ruleKey + "_threshold"
+		if raw, ok := ruleMap[threshKey]; ok {
+			if threshold, ok := raw.(float64); ok && alert.Value < threshold {
+				return false // value below user's threshold
+			}
+		}
+	}
+
+	return true
 }
 
 // ruleTypeFromAlertID extracts the rule type from the full alert ID for dedup.

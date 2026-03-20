@@ -455,6 +455,41 @@ func (c *Client) GetRecentAlertLogs(ctx context.Context, subscriberID string, si
 	return rows, nil
 }
 
+// AlertOutcomeEntry holds the minimal fields needed for performance aggregation.
+type AlertOutcomeEntry struct {
+	Severity      string   `json:"severity"`
+	OutcomePct15m *float64 `json:"outcome_pct_15m"`
+	OutcomePct1h  *float64 `json:"outcome_pct_1h"`
+}
+
+// GetAlertOutcomes returns alert_history rows that have 1h outcomes, within the given window.
+// Used to compute signal performance stats for the landing page.
+func (c *Client) GetAlertOutcomes(ctx context.Context, since time.Time) ([]AlertOutcomeEntry, error) {
+	sinceStr := since.Format(time.RFC3339)
+	u := fmt.Sprintf(
+		"%s/rest/v1/alert_history?outcome_pct_1h=not.is.null&triggered_at=gte.%s&select=severity,outcome_pct_15m,outcome_pct_1h&limit=2000&order=triggered_at.desc",
+		c.baseURL, url.QueryEscape(sinceStr),
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetAlertOutcomes: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetAlertOutcomes: status %d", resp.StatusCode)
+	}
+	var rows []AlertOutcomeEntry
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("supabase: GetAlertOutcomes decode: %w", err)
+	}
+	return rows, nil
+}
+
 // LogAlertHistory logs every alert that fires (regardless of subscriber dedup).
 // POST {baseURL}/rest/v1/alert_history
 func (c *Client) LogAlertHistory(ctx context.Context, symbol, alertID, message, severity string, priceAtAlert float64) error {
@@ -954,6 +989,52 @@ func (c *Client) CountCustomPriceAlerts(ctx context.Context, subscriberID string
 		return n, nil
 	}
 	return 0, nil
+}
+
+// GetSubscriberRules returns the current rules JSONB for a subscriber by username.
+func (c *Client) GetSubscriberRules(ctx context.Context, username string) (json.RawMessage, error) {
+	reqURL := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=rules&limit=1", c.baseURL, url.QueryEscape(username))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetSubscriberRules: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetSubscriberRules: status %d", resp.StatusCode)
+	}
+	var rows []struct {
+		Rules json.RawMessage `json:"rules"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil || len(rows) == 0 {
+		return nil, nil
+	}
+	return rows[0].Rules, nil
+}
+
+// UpdateSubscriberRules patches the rules JSONB for a subscriber by username.
+func (c *Client) UpdateSubscriberRules(ctx context.Context, username string, rules json.RawMessage) error {
+	reqURL := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, url.QueryEscape(username))
+	body, _ := json.Marshal(map[string]any{"rules": rules})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: UpdateSubscriberRules: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("supabase: UpdateSubscriberRules: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // setHeaders applies the standard Supabase auth headers to every request.

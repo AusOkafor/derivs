@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -1453,6 +1454,116 @@ func (h *Handler) DiscordWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ─── Alert performance stats ──────────────────────────────────────────────────
+
+type severityStats struct {
+	Count       int     `json:"count"`
+	AvgAbs15m   float64 `json:"avg_abs_pct_15m"`
+	AvgAbs1h    float64 `json:"avg_abs_pct_1h"`
+	Effective1h int     `json:"effective_pct_1h"` // % where |outcome_1h| >= 1%
+}
+
+type alertPerformanceResponse struct {
+	Period      string        `json:"period"`
+	TotalAlerts int           `json:"total_alerts"`
+	High        severityStats `json:"high"`
+	Medium      severityStats `json:"medium"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+}
+
+// perfCache avoids hitting Supabase on every landing page load.
+var (
+	perfCacheMu   sync.Mutex
+	perfCacheData *alertPerformanceResponse
+	perfCacheAt   time.Time
+)
+
+// AlertPerformance handles GET /api/alerts/performance.
+// Returns aggregated signal accuracy stats for the last 30 days. Cached for 10 minutes.
+func (h *Handler) AlertPerformance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	perfCacheMu.Lock()
+	if perfCacheData != nil && time.Since(perfCacheAt) < 10*time.Minute {
+		cached := perfCacheData
+		perfCacheMu.Unlock()
+		writeJSON(w, http.StatusOK, cached)
+		return
+	}
+	perfCacheMu.Unlock()
+
+	since := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	entries, err := h.db.GetAlertOutcomes(r.Context(), since)
+	if err != nil {
+		log.Printf("AlertPerformance: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch"})
+		return
+	}
+
+	type bucket struct {
+		count     int
+		sum15m    float64
+		sum1h     float64
+		effective int
+	}
+	buckets := map[string]*bucket{}
+
+	for _, e := range entries {
+		sev := strings.ToLower(e.Severity)
+		if buckets[sev] == nil {
+			buckets[sev] = &bucket{}
+		}
+		b := buckets[sev]
+		b.count++
+		if e.OutcomePct15m != nil {
+			b.sum15m += math.Abs(*e.OutcomePct15m)
+		}
+		if e.OutcomePct1h != nil {
+			b.sum1h += math.Abs(*e.OutcomePct1h)
+			if math.Abs(*e.OutcomePct1h) >= 1.0 {
+				b.effective++
+			}
+		}
+	}
+
+	toStats := func(sev string) severityStats {
+		b := buckets[sev]
+		if b == nil || b.count == 0 {
+			return severityStats{}
+		}
+		effPct := int(float64(b.effective) / float64(b.count) * 100)
+		return severityStats{
+			Count:       b.count,
+			AvgAbs15m:   math.Round(b.sum15m/float64(b.count)*100) / 100,
+			AvgAbs1h:    math.Round(b.sum1h/float64(b.count)*100) / 100,
+			Effective1h: effPct,
+		}
+	}
+
+	total := 0
+	for _, b := range buckets {
+		total += b.count
+	}
+
+	result := &alertPerformanceResponse{
+		Period:      "30d",
+		TotalAlerts: total,
+		High:        toStats("high"),
+		Medium:      toStats("medium"),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	perfCacheMu.Lock()
+	perfCacheData = result
+	perfCacheAt = time.Now()
+	perfCacheMu.Unlock()
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func isValidDiscordWebhookURL(u string) bool {
 	return strings.HasPrefix(u, "https://discord.com/api/webhooks/") ||
 		strings.HasPrefix(u, "https://discordapp.com/api/webhooks/")
@@ -1512,6 +1623,81 @@ func (h *Handler) SnoozeHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		snoozeGlobal.Unsnooze(subID, "ALL")
 		writeJSON(w, http.StatusOK, map[string]string{"status": "unsnoozed"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+// ─── Alert threshold settings ─────────────────────────────────────────────────
+
+// thresholdKeys are the rule keys that support numeric thresholds.
+var thresholdKeys = []string{"long_bias", "short_bias", "oi_divergence", "funding_spike"}
+
+// ThresholdSettings handles GET / POST /api/settings/thresholds
+//
+//	GET  ?username=X            → {"long_bias_threshold": 65.0, ...}
+//	POST ?username=X  {body}    → merge threshold values into subscriber rules
+func (h *Handler) ThresholdSettings(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if err := validateUsername(username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		current, err := h.db.GetSubscriberRules(r.Context(), username)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch rules"})
+			return
+		}
+		var ruleMap map[string]interface{}
+		if len(current) > 0 {
+			json.Unmarshal(current, &ruleMap) //nolint:errcheck
+		}
+		out := make(map[string]interface{})
+		for _, k := range thresholdKeys {
+			key := k + "_threshold"
+			if v, ok := ruleMap[key]; ok {
+				out[key] = v
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
+
+	case http.MethodPost:
+		var incoming map[string]float64
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			return
+		}
+		current, err := h.db.GetSubscriberRules(r.Context(), username)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch rules"})
+			return
+		}
+		var ruleMap map[string]interface{}
+		if len(current) > 0 {
+			json.Unmarshal(current, &ruleMap) //nolint:errcheck
+		}
+		if ruleMap == nil {
+			ruleMap = make(map[string]interface{})
+		}
+		allowed := make(map[string]bool)
+		for _, k := range thresholdKeys {
+			allowed[k+"_threshold"] = true
+		}
+		for k, v := range incoming {
+			if allowed[k] {
+				ruleMap[k] = v
+			}
+		}
+		merged, _ := json.Marshal(ruleMap)
+		if err := h.db.UpdateSubscriberRules(r.Context(), username, merged); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update rules"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

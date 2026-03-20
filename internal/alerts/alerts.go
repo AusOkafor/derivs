@@ -192,31 +192,37 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	} else {
 	oi1h := snap.OpenInterest.OIChange1h
 	if oi1h > 2.0 {
-		add("oi-spike-1h",
-			fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Watch for volatile directional move.", oi1h),
-			"high",
-		)
+		a := models.Alert{
+			ID: fmt.Sprintf("%s-oi-spike-1h", snap.Symbol), Symbol: snap.Symbol,
+			Message:   fmt.Sprintf("OI up %.1f%% in 1h — new money entering fast. Watch for volatile directional move.", oi1h),
+			Severity:  "high", Timestamp: now, Value: oi1h, RuleKey: "oi_spike_1h",
+		}
+		out = append(out, a)
 	} else if oi1h < -2.0 {
-		add("oi-spike-1h",
-			fmt.Sprintf("OI down %.1f%% in 1h — rapid deleveraging detected. Liquidation cascade risk.", math.Abs(oi1h)),
-			"high",
-		)
+		a := models.Alert{
+			ID: fmt.Sprintf("%s-oi-spike-1h", snap.Symbol), Symbol: snap.Symbol,
+			Message:   fmt.Sprintf("OI down %.1f%% in 1h — rapid deleveraging detected. Liquidation cascade risk.", math.Abs(oi1h)),
+			Severity:  "high", Timestamp: now, Value: math.Abs(oi1h), RuleKey: "oi_spike_1h",
+		}
+		out = append(out, a)
 	}
 
 	// ── Rule 3: OI divergence (24h) ───────────────────────────────────────────
 	oi24h := snap.OpenInterest.OIChange24h
 	if oi24h > 5.0 {
-		add("oi-divergence-24h",
-			fmt.Sprintf("OI up %.1f%% in 24h — new money entering fast. Watch for volatile directional move as positions build.",
-				oi24h),
-			"medium",
-		)
+		a := models.Alert{
+			ID: fmt.Sprintf("%s-oi-divergence-24h", snap.Symbol), Symbol: snap.Symbol,
+			Message:   fmt.Sprintf("OI up %.1f%% in 24h — new money entering fast. Watch for volatile directional move as positions build.", oi24h),
+			Severity:  "medium", Timestamp: now, Value: oi24h, RuleKey: "oi_divergence_24h",
+		}
+		out = append(out, a)
 	} else if oi24h < -5.0 {
-		add("oi-divergence-24h",
-			fmt.Sprintf("Open interest down %.1f%% in 24h — leverage unwinding detected. Market deleveraging, expect lower volatility.",
-				math.Abs(oi24h)),
-			"medium",
-		)
+		a := models.Alert{
+			ID: fmt.Sprintf("%s-oi-divergence-24h", snap.Symbol), Symbol: snap.Symbol,
+			Message:   fmt.Sprintf("Open interest down %.1f%% in 24h — leverage unwinding detected. Market deleveraging, expect lower volatility.", math.Abs(oi24h)),
+			Severity:  "medium", Timestamp: now, Value: math.Abs(oi24h), RuleKey: "oi_divergence_24h",
+		}
+		out = append(out, a)
 	}
 	}
 
@@ -231,17 +237,17 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 
 		switch {
 		case avgLong > 72.0:
-			add("long-bias",
-				fmt.Sprintf("%.1f%% of traders are long across exchanges — crowded trade. High liquidation risk below current price if bulls lose control.",
-					avgLong),
-				"medium",
-			)
+			out = append(out, models.Alert{
+				ID: fmt.Sprintf("%s-long-bias", snap.Symbol), Symbol: snap.Symbol,
+				Message:  fmt.Sprintf("%.1f%% of traders are long across exchanges — crowded trade. High liquidation risk below current price if bulls lose control.", avgLong),
+				Severity: "medium", Timestamp: now, Value: avgLong, RuleKey: "long_bias",
+			})
 		case avgLong < 28.0:
-			add("short-bias",
-				fmt.Sprintf("%.1f%% of traders are short — crowded short. Watch for short squeeze, especially on any positive catalyst.",
-					shortPct),
-				"medium",
-			)
+			out = append(out, models.Alert{
+				ID: fmt.Sprintf("%s-short-bias", snap.Symbol), Symbol: snap.Symbol,
+				Message:  fmt.Sprintf("%.1f%% of traders are short — crowded short. Watch for short squeeze, especially on any positive catalyst.", shortPct),
+				Severity: "medium", Timestamp: now, Value: shortPct, RuleKey: "short_bias",
+			})
 		}
 	}
 

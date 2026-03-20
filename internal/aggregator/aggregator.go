@@ -86,6 +86,8 @@ type bybitTickerItem struct {
 	Price24hPcnt    string `json:"price24hPcnt"`
 	FundingRate     string `json:"fundingRate"`
 	NextFundingTime string `json:"nextFundingTime"`
+	IndexPrice      string `json:"indexPrice"`
+	MarkPrice       string `json:"markPrice"`
 }
 
 type bybitTickerResult struct {
@@ -181,26 +183,29 @@ func pctChange(from, to float64) float64 {
 // ─── Private fetch methods ────────────────────────────────────────────────────
 
 // fetchBybitFundingRate fetches the current funding rate from Bybit's ticker endpoint.
-func (a *Aggregator) fetchBybitFundingRate(ctx context.Context, symbol string) (float64, int64, error) {
+// Also returns indexPrice and markPrice for perp/spot basis calculation.
+func (a *Aggregator) fetchBybitFundingRate(ctx context.Context, symbol string) (rate float64, nextFunding int64, indexPrice float64, markPrice float64, err error) {
 	u := fmt.Sprintf(
 		"https://api.bybit.com/v5/market/tickers?category=linear&symbol=%s",
 		perpSymbol(symbol),
 	)
 
 	var raw bybitResp[bybitTickerResult]
-	if err := a.publicGet(ctx, u, &raw); err != nil {
+	if err = a.publicGet(ctx, u, &raw); err != nil {
 		a.recordError("bybit", err)
-		return 0, 0, fmt.Errorf("fetchBybitFundingRate: %w", err)
+		return 0, 0, 0, 0, fmt.Errorf("fetchBybitFundingRate: %w", err)
 	}
 	a.recordSuccess("bybit")
 	if len(raw.Result.List) == 0 {
-		return 0, 0, fmt.Errorf("fetchBybitFundingRate: no data for %s", symbol)
+		return 0, 0, 0, 0, fmt.Errorf("fetchBybitFundingRate: no data for %s", symbol)
 	}
 
 	item := raw.Result.List[0]
-	rate, _ := strconv.ParseFloat(item.FundingRate, 64)
-	nextFunding, _ := strconv.ParseInt(item.NextFundingTime, 10, 64)
-	return rate, nextFunding, nil
+	rate, _ = strconv.ParseFloat(item.FundingRate, 64)
+	nextFunding, _ = strconv.ParseInt(item.NextFundingTime, 10, 64)
+	indexPrice, _ = strconv.ParseFloat(item.IndexPrice, 64)
+	markPrice, _ = strconv.ParseFloat(item.MarkPrice, 64)
+	return
 }
 
 // fetchBinanceFundingRate fetches the current funding rate from Binance premium index.
@@ -638,13 +643,31 @@ func (a *Aggregator) FetchSnapshot(ctx context.Context, symbol string) (models.M
 		var nextFunding int64
 
 		// Bybit
-		if r, nf, err := a.fetchBybitFundingRate(ctx, symbol); err != nil {
+		if r, nf, idxPrice, mkPrice, err := a.fetchBybitFundingRate(ctx, symbol); err != nil {
 			log.Printf("aggregator: fetchBybitFundingRate: %v", err)
 		} else {
 			rates = append(rates, models.ExchangeFundingRate{Exchange: "Bybit", Rate: r, RatePct: r * 100})
 			sum += r
 			count++
 			nextFunding = nf
+			if idxPrice > 0 {
+				perpPrice := 0.0
+				if r2, _, err2 := a.FetchTicker(ctx, symbol); err2 == nil {
+					perpPrice = r2
+				}
+				basisPct := 0.0
+				if idxPrice > 0 && perpPrice > 0 {
+					basisPct = (perpPrice - idxPrice) / idxPrice * 100
+				}
+				mu.Lock()
+				snap.PerpBasis = &models.PerpBasis{
+					PerpPrice:  perpPrice,
+					IndexPrice: idxPrice,
+					MarkPrice:  mkPrice,
+					BasisPct:   basisPct,
+				}
+				mu.Unlock()
+			}
 		}
 		// Binance
 		if r, err := a.fetchBinanceFundingRate(ctx, symbol); err != nil {

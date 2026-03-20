@@ -65,6 +65,7 @@ type MarketSnapshot struct {
 	LiquidationMap      LiquidationMap       `json:"liquidation_map"`
 	LongShortRatios     []LongShortRatio     `json:"long_short_ratios"`
 	RecentLiquidations  *RecentLiquidations  `json:"recent_liquidations,omitempty"`
+	PerpBasis           *PerpBasis           `json:"perp_basis,omitempty"`
 	Timestamp           time.Time            `json:"timestamp"`
 }
 
@@ -86,6 +87,18 @@ type Alert struct {
 	ClusterSize  float64   `json:"cluster_size"`
 	Distance     float64   `json:"distance"`     // stored as decimal (0.01 = 1%) for cards
 	Probability  int       `json:"probability"`
+	// Value holds the numeric metric that triggered this alert (e.g. long bias %, OI change %).
+	// Used by the worker to apply per-subscriber threshold filtering.
+	Value   float64 `json:"value,omitempty"`
+	RuleKey string  `json:"rule_key,omitempty"`
+}
+
+// PerpBasis holds the perp/spot price spread for a symbol.
+type PerpBasis struct {
+	PerpPrice  float64 `json:"perp_price"`
+	IndexPrice float64 `json:"index_price"`
+	MarkPrice  float64 `json:"mark_price"`
+	BasisPct   float64 `json:"basis_pct"` // (perp - index) / index * 100
 }
 
 type AlertHistoryEntry struct {
