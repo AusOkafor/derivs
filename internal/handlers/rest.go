@@ -1725,3 +1725,48 @@ func (h *Handler) ThresholdSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
+
+// ─── Klines proxy ─────────────────────────────────────────────────────────────
+
+// Klines proxies GET /api/klines?symbol=BTC&interval=5m&limit=100 to Binance
+// server-side, avoiding CORS issues with direct browser requests.
+func (h *Handler) Klines(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	symbol := strings.ToUpper(r.URL.Query().Get("symbol"))
+	if symbol == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol required"})
+		return
+	}
+	interval := r.URL.Query().Get("interval")
+	if interval == "" {
+		interval = "5m"
+	}
+	limit := r.URL.Query().Get("limit")
+	if limit == "" {
+		limit = "100"
+	}
+
+	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%sUSDT&interval=%s&limit=%s",
+		symbol, interval, limit)
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to build request"})
+		return
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to fetch klines"})
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=15")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}

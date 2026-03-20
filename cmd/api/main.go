@@ -107,6 +107,7 @@ func main() {
 	mux.HandleFunc("/api/settings/discord", h.DiscordWebhook)
 	mux.HandleFunc("/api/snooze", h.SnoozeHandler)
 	mux.HandleFunc("/api/alerts/performance", h.AlertPerformance)
+	mux.HandleFunc("/api/klines", h.Klines)
 	mux.HandleFunc("/api/settings/thresholds", h.ThresholdSettings)
 	mux.HandleFunc("/api/tickers", h.GetTickers)
 	mux.HandleFunc("/api/subscribe", h.Subscribe)
