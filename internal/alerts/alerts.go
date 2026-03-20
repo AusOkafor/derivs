@@ -173,18 +173,27 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 
 	// ── Rule 1: Elevated funding rate ────────────────────────────────────────
 	rate := snap.FundingRate.Rate
+	absRate := math.Abs(rate) * 100
 	if rate > 0.0005 {
-		add("funding-elevated",
-			fmt.Sprintf("Funding rate at +%.4f%% (APR %.1f%%) — longs are paying heavily. Market is overleveraged long. Long squeeze risk is elevated — any reversal flushes crowded longs.",
-				rate*100, rate*100*3*365),
-			"high",
-		)
+		out = append(out, models.Alert{
+			ID:        fmt.Sprintf("%s-funding-elevated", snap.Symbol),
+			Symbol:    snap.Symbol,
+			Message:   fmt.Sprintf("Funding rate at +%.4f%% (APR %.1f%%) — longs are paying heavily. Market is overleveraged long. Long squeeze risk is elevated — any reversal flushes crowded longs.", rate*100, rate*100*3*365),
+			Severity:  "high",
+			Timestamp: now,
+			Value:     absRate,
+			RuleKey:   "funding_spike",
+		})
 	} else if rate < -0.0005 {
-		add("funding-elevated",
-			fmt.Sprintf("Funding rate at %.4f%% — shorts are paying longs. Negative funding this extreme signals overcrowded shorts. Short squeeze risk is elevated.",
-				rate*100),
-			"high",
-		)
+		out = append(out, models.Alert{
+			ID:        fmt.Sprintf("%s-funding-elevated", snap.Symbol),
+			Symbol:    snap.Symbol,
+			Message:   fmt.Sprintf("Funding rate at %.4f%% — shorts are paying longs. Negative funding this extreme signals overcrowded shorts. Short squeeze risk is elevated.", rate*100),
+			Severity:  "high",
+			Timestamp: now,
+			Value:     absRate,
+			RuleKey:   "funding_spike",
+		})
 	}
 
 	// ── Rule 2: OI spike (1h) ─────────────────────────────────────────────────

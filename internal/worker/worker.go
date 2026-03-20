@@ -940,16 +940,14 @@ func alertRuleKey(message string) string {
 	switch {
 	case strings.Contains(msg, "funding rate"):
 		return "funding_spike"
-	case strings.Contains(msg, "oi") || strings.Contains(msg, "open interest"):
+	case strings.Contains(msg, "oi up") || strings.Contains(msg, "oi down") || strings.Contains(msg, "open interest"):
 		return "oi_divergence"
-	case strings.Contains(msg, "long bias") || strings.Contains(msg, "traders are long"):
+	case strings.Contains(msg, "traders are long"):
 		return "long_bias"
-	case strings.Contains(msg, "short bias") || strings.Contains(msg, "traders are short"):
+	case strings.Contains(msg, "traders are short"):
 		return "short_bias"
 	case strings.Contains(msg, "liquidation"):
 		return "liquidation_cluster"
-	case strings.Contains(msg, "negative"):
-		return "negative_funding"
 	default:
 		return ""
 	}
