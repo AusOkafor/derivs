@@ -103,15 +103,20 @@ func (c *Calculator) Calculate(snap models.MarketSnapshot) models.FearGreedScore
 // ─── Component scorers ────────────────────────────────────────────────────────
 
 func fundingScore(rate float64) int {
+	// Added intermediate levels — previously jumped from 50→70 for any positive rate.
 	switch {
 	case rate >= 0.0005:
 		return 90
+	case rate >= 0.0003:
+		return 75
 	case rate >= 0.0001:
-		return 70
+		return 60
 	case rate >= -0.0001:
 		return 50
+	case rate >= -0.0003:
+		return 35
 	case rate >= -0.0005:
-		return 30
+		return 25
 	default:
 		return 10
 	}
@@ -142,48 +147,56 @@ func longShortScore(ratios []models.LongShortRatio) int {
 	}
 	avg := sum / float64(len(ratios))
 
+	// Bell-curve: extreme positioning in EITHER direction = overcrowding = risk = Fear.
+	// In derivatives, >65% longs or <35% longs signals a crowded trade prone to cascades —
+	// not sustained greed. Previously this was monotonic (more longs = more greed), which
+	// contradicted liquidationScore and ignored liquidation cascade risk at extremes.
 	switch {
-	case avg >= 70:
-		return 90
-	case avg >= 60:
-		return 65
-	case avg >= 40:
-		return 50
-	case avg >= 30:
-		return 35
+	case avg >= 75:
+		return 20 // extreme long crowding — cascade risk
+	case avg >= 65:
+		return 35 // overcrowded longs — caution
+	case avg >= 55:
+		return 60 // longs slightly leading — mild greed
+	case avg >= 45:
+		return 50 // balanced — neutral
+	case avg >= 35:
+		return 40 // shorts slightly leading — mild fear
 	default:
-		return 10
+		return 20 // extreme short crowding — squeeze/unwind risk
 	}
 }
 
 func liquidationScore(levels []models.LiquidationLevel) int {
-	var largestLong, largestShort float64
+	// Use TOTAL cluster size on each side — previously used only the largest single cluster.
+	// Large long clusters below price = trapped longs = bearish pressure = Fear.
+	// Large short clusters above price = trapped shorts = upward pressure = Greed.
+	var totalLong, totalShort float64
 	for _, l := range levels {
-		if l.Side == "long" && l.SizeUsd > largestLong {
-			largestLong = l.SizeUsd
-		}
-		if l.Side == "short" && l.SizeUsd > largestShort {
-			largestShort = l.SizeUsd
+		if l.Side == "long" {
+			totalLong += l.SizeUsd
+		} else {
+			totalShort += l.SizeUsd
 		}
 	}
 
-	total := largestLong + largestShort
+	total := totalLong + totalShort
 	if total == 0 {
 		return 50 // neutral when no data
 	}
 
-	ratio := largestLong / total
+	ratio := totalLong / total
 	switch {
 	case ratio >= 0.7:
-		return 25
+		return 20 // dominated by long clusters — trapped longs = bearish
 	case ratio >= 0.55:
-		return 40
+		return 38
 	case ratio >= 0.45:
 		return 50
 	case ratio >= 0.3:
-		return 60
+		return 62
 	default:
-		return 75
+		return 80 // dominated by short clusters — trapped shorts = bullish pressure
 	}
 }
 
