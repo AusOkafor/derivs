@@ -501,49 +501,124 @@ func avgLongPct(ratios []models.LongShortRatio) float64 {
 }
 
 func calcStopHunt(snap models.MarketSnapshot, gravity models.LiquidityGravity, magnet *models.LiquidationMagnet, momentum float64) models.StopHuntSignal {
-	shortHuntProb := int(gravity.UpwardPull)
-	longHuntProb := int(gravity.DownwardPull)
-
 	rate := snap.FundingRate.Rate
-	if rate > 0.0003 {
-		longHuntProb += 15
-		shortHuntProb -= 15
-	} else if rate < -0.0003 {
-		shortHuntProb += 15
-		longHuntProb -= 15
-	}
-
 	avgLong := avgLongPct(snap.LongShortRatios)
+
+	// === DIRECTIONAL SCORE: which side is more likely to be hunted ===
+	// Seed from gravity (directional distribution), then adjust with independent signals.
+	// Positive = short hunt (upward sweep), Negative = long hunt (downward sweep).
+	directional := gravity.UpwardPull - gravity.DownwardPull // -50 to +50
+
+	// Funding rate: positive = longs paying = long liquidation pressure
+	if rate > 0.0005 {
+		directional -= 30
+	} else if rate > 0.0003 {
+		directional -= 20
+	} else if rate > 0.0001 {
+		directional -= 10
+	} else if rate < -0.0005 {
+		directional += 30
+	} else if rate < -0.0003 {
+		directional += 20
+	} else if rate < -0.0001 {
+		directional += 10
+	}
+
+	// Long/short ratio: crowded longs = downward hunt, crowded shorts = upward hunt
 	if avgLong > 65 {
-		longHuntProb += 10
-		shortHuntProb -= 10
+		directional -= 20
+	} else if avgLong > 60 {
+		directional -= 10
+	} else if avgLong < 35 {
+		directional += 20
 	} else if avgLong < 40 {
-		shortHuntProb += 10
-		longHuntProb -= 10
+		directional += 10
 	}
 
-	total := shortHuntProb + longHuntProb
-	if total <= 0 {
-		return models.StopHuntSignal{ShortSideProb: 50, LongSideProb: 50, TargetSide: "unclear"}
-	}
-	shortHuntProb = shortHuntProb * 100 / total
-	longHuntProb = 100 - shortHuntProb
-
-	if shortHuntProb > 95 {
-		shortHuntProb = 95
-	}
-	if shortHuntProb < 5 {
-		shortHuntProb = 5
-	}
-	longHuntProb = 100 - shortHuntProb
-
-	// Momentum filter: price moving toward a side increases that side's hunt probability
-	if momentum > 0.05 {
-		shortHuntProb = min(98, int(float64(shortHuntProb)*1.1))
-		longHuntProb = max(2, 100-shortHuntProb)
+	// Momentum: price already moving toward a side amplifies that side
+	if momentum > 0.1 {
+		directional += 15
+	} else if momentum > 0.05 {
+		directional += 8
+	} else if momentum < -0.1 {
+		directional -= 15
 	} else if momentum < -0.05 {
-		longHuntProb = min(98, int(float64(longHuntProb)*1.1))
-		shortHuntProb = max(2, 100-longHuntProb)
+		directional -= 8
+	}
+
+	// Convert directional score to side probabilities (range kept 5–95)
+	shortHuntPct := 50.0 + directional*0.5
+	if shortHuntPct > 95 {
+		shortHuntPct = 95
+	}
+	if shortHuntPct < 5 {
+		shortHuntPct = 5
+	}
+	shortHuntProb := int(math.Round(shortHuntPct))
+	longHuntProb := 100 - shortHuntProb
+
+	// === CONFIDENCE SCORE: how likely any hunt occurs at all ===
+	// Built entirely from signals independent of gravity percentage.
+	// Max 70 — without a validated liquidation magnet we should never claim high certainty.
+	confidence := 0
+
+	// Funding magnitude: extreme funding creates urgency to rebalance
+	absRate := math.Abs(rate)
+	if absRate > 0.0005 {
+		confidence += 25
+	} else if absRate > 0.0003 {
+		confidence += 15
+	} else if absRate > 0.0001 {
+		confidence += 8
+	}
+
+	// OI change 1h: rapid position buildup = fragile, liquidation-prone
+	if snap.OpenInterest.OIChange1h > 2.0 {
+		confidence += 20
+	} else if snap.OpenInterest.OIChange1h > 1.0 {
+		confidence += 12
+	} else if snap.OpenInterest.OIChange1h > 0.5 {
+		confidence += 6
+	}
+
+	// Nearby liquidation cluster: proximity + size = imminent sweep risk
+	currentPrice := snap.LiquidationMap.CurrentPrice
+	if currentPrice > 0 {
+		for _, lvl := range snap.LiquidationMap.Levels {
+			distPct := math.Abs(lvl.Price-currentPrice) / currentPrice * 100
+			if distPct < 1.0 && lvl.SizeUsd > 500_000 {
+				confidence += 25
+				break
+			} else if distPct < 2.0 && lvl.SizeUsd > 200_000 {
+				confidence += 15
+				break
+			} else if distPct < 3.0 && lvl.SizeUsd > 100_000 {
+				confidence += 8
+				break
+			}
+		}
+	}
+
+	// Extreme positioning crowding (high probability trapped positions exist)
+	if avgLong > 0 && (avgLong > 70 || avgLong < 30) {
+		confidence += 10
+	}
+
+	// OI declining sharply while funding is still high = trapped positions unwinding
+	if snap.OpenInterest.OIChange24h < -5 && absRate > 0.0003 {
+		confidence += 10
+	}
+
+	// Strong momentum (price already moving = execution risk is live)
+	absMomentum := math.Abs(momentum)
+	if absMomentum > 0.1 {
+		confidence += 8
+	} else if absMomentum > 0.05 {
+		confidence += 4
+	}
+
+	if confidence > 70 {
+		confidence = 70
 	}
 
 	targetSide := "longs"
@@ -557,15 +632,17 @@ func calcStopHunt(snap models.MarketSnapshot, gravity models.LiquidityGravity, m
 	}
 
 	reasoning := fmt.Sprintf(
-		"%.1f%% upward liquidity pull with %s funding — %s side more likely to be hunted first",
+		"%.1f%% upward liquidity pull with %s funding — %s side more likely to be hunted first (confidence: %d%%)",
 		gravity.UpwardPull,
 		fundingDescription(rate),
 		targetSide,
+		confidence,
 	)
 
 	return models.StopHuntSignal{
 		ShortSideProb: shortHuntProb,
 		LongSideProb:  longHuntProb,
+		Confidence:    confidence,
 		TargetSide:    targetSide,
 		TargetPrice:   targetPrice,
 		Reasoning:     reasoning,

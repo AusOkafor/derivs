@@ -211,6 +211,7 @@ type VolatilityExpansion struct {
 type StopHuntSignal struct {
 	ShortSideProb int     `json:"short_side_prob"` // probability shorts get hunted first
 	LongSideProb  int     `json:"long_side_prob"`  // probability longs get hunted first
+	Confidence    int     `json:"confidence"`      // 0-70: how likely any hunt occurs (independent of gravity)
 	TargetSide    string  `json:"target_side"`    // "shorts" or "longs"
 	TargetPrice   float64 `json:"target_price"`   // most likely hunt target price
 	Reasoning     string  `json:"reasoning"`
