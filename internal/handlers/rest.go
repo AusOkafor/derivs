@@ -1436,7 +1436,11 @@ func (h *Handler) DiscordWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.db.UpdateDiscordWebhook(r.Context(), username, body.URL); err != nil {
 			log.Printf("DiscordWebhook set: %v", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save"})
+			if strings.Contains(err.Error(), "subscriber not found") {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Subscribe via Telegram first before adding a Discord webhook"})
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save"})
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
@@ -1707,7 +1711,12 @@ func (h *Handler) ThresholdSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		merged, _ := json.Marshal(ruleMap)
 		if err := h.db.UpdateSubscriberRules(r.Context(), username, merged); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update rules"})
+			log.Printf("ThresholdSettings update: %v", err)
+			if strings.Contains(err.Error(), "subscriber not found") {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Subscribe via Telegram first before saving thresholds"})
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update rules"})
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})

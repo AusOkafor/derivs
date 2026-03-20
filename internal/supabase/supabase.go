@@ -685,7 +685,8 @@ func (c *Client) SaveUserSettings(ctx context.Context, settings UserSettings) er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("supabase: SaveUserSettings: status %d", resp.StatusCode)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("supabase: SaveUserSettings: status %d body=%s", resp.StatusCode, string(bodyBytes))
 	}
 	return nil
 }
@@ -753,7 +754,7 @@ func (c *Client) UpdateDiscordWebhook(ctx context.Context, username, webhookURL 
 		return fmt.Errorf("supabase: build request: %w", err)
 	}
 	c.setHeaders(req)
-	req.Header.Set("Prefer", "return=minimal")
+	req.Header.Set("Prefer", "return=minimal,count=exact")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("supabase: UpdateDiscordWebhook: %w", err)
@@ -761,6 +762,10 @@ func (c *Client) UpdateDiscordWebhook(ctx context.Context, username, webhookURL 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("supabase: UpdateDiscordWebhook: status %d", resp.StatusCode)
+	}
+	// Content-Range: */0 means no subscriber row was found — user hasn't subscribed yet.
+	if cr := resp.Header.Get("Content-Range"); cr == "*/0" {
+		return fmt.Errorf("subscriber not found: user must subscribe before saving Discord settings")
 	}
 	return nil
 }
@@ -1025,7 +1030,7 @@ func (c *Client) UpdateSubscriberRules(ctx context.Context, username string, rul
 		return fmt.Errorf("supabase: build request: %w", err)
 	}
 	c.setHeaders(req)
-	req.Header.Set("Prefer", "return=minimal")
+	req.Header.Set("Prefer", "return=minimal,count=exact")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("supabase: UpdateSubscriberRules: %w", err)
@@ -1033,6 +1038,10 @@ func (c *Client) UpdateSubscriberRules(ctx context.Context, username string, rul
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("supabase: UpdateSubscriberRules: status %d", resp.StatusCode)
+	}
+	// Content-Range: */0 means no subscriber row was found — user hasn't subscribed yet.
+	if cr := resp.Header.Get("Content-Range"); cr == "*/0" {
+		return fmt.Errorf("subscriber not found: user must subscribe before saving alert thresholds")
 	}
 	return nil
 }
