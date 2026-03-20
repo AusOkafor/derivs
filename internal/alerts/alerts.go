@@ -91,10 +91,11 @@ func aggregateLiquidationZones(levels []models.LiquidationLevel, currentPrice fl
 }
 
 const (
-	MinClusterSize        = 200_000   // $200k minimum for ANY liquidation alert (zone, magnet, heat feed)
-	highSeverityMinSize   = 500_000   // $500k minimum for HIGH
-	medSeverityMinSize    = 100_000   // $100k minimum for MEDIUM (must be >= minClusterSize to fire)
+	MinClusterSize        = 200_000     // $200k minimum for ANY liquidation alert (zone, magnet, heat feed)
+	highSeverityMinSize   = 500_000     // $500k minimum for HIGH
+	medSeverityMinSize    = 100_000     // $100k minimum for MEDIUM (must be >= minClusterSize to fire)
 	minOIForRegimeAlert   = 100_000_000 // $100M minimum OI for regime/OI alerts (excludes small caps)
+	minOIForBiasAlert     = 50_000_000  // $50M minimum OI for long/short bias + squeeze alerts
 )
 
 func zoneSeverity(zone LiquidationZone, distance float64, symbol string) string {
@@ -107,7 +108,7 @@ func zoneSeverity(zone LiquidationZone, distance float64, symbol string) string 
 	if zone.HasWhale && zone.TotalUSD >= highSeverityMinSize && distance <= 1.0 {
 		return "high"
 	}
-	if zone.TotalUSD >= medSeverityMinSize && distance <= 3.0 {
+	if zone.TotalUSD >= medSeverityMinSize && distance <= 2.0 {
 		return "medium"
 	}
 	return ""
@@ -227,7 +228,8 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	}
 
 	// ── Rules 4 & 5: Long/short bias ─────────────────────────────────────────
-	if len(snap.LongShortRatios) > 0 {
+	// Guard: skip coins with OI < $50M — thin markets produce unreliable L/S ratios.
+	if snap.OpenInterest.OIUsd >= minOIForBiasAlert && len(snap.LongShortRatios) > 0 {
 		var sumLong float64
 		for _, r := range snap.LongShortRatios {
 			sumLong += r.LongPct
@@ -362,7 +364,8 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	// (ShortSqueezeProbability >= 65), which requires multi-signal confirmation.
 
 	// ── Rule 9: Short squeeze probability high ─────────────────────────────────
-	if sigs.ShortSqueezeProbability >= 65 {
+	// Guard: skip coins with OI < $50M — squeeze signals on thin markets are unreliable.
+	if snap.OpenInterest.OIUsd >= minOIForBiasAlert && sigs.ShortSqueezeProbability >= 65 {
 		id := fmt.Sprintf("short-squeeze-%d", sigs.ShortSqueezeProbability/10*10)
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
@@ -375,7 +378,7 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 	}
 
 	// ── Rule 10: Long squeeze probability high ──────────────────────────────────
-	if sigs.LongSqueezeProbability >= 65 {
+	if snap.OpenInterest.OIUsd >= minOIForBiasAlert && sigs.LongSqueezeProbability >= 65 {
 		id := fmt.Sprintf("long-squeeze-%d", sigs.LongSqueezeProbability/10*10)
 		a := models.Alert{
 			ID:        fmt.Sprintf("%s-%s", snap.Symbol, id),
