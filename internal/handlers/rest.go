@@ -1465,11 +1465,16 @@ type severityStats struct {
 
 type alertPerformanceResponse struct {
 	Period      string        `json:"period"`
+	PeriodStart time.Time     `json:"period_start"`
 	TotalAlerts int           `json:"total_alerts"`
 	High        severityStats `json:"high"`
 	Medium      severityStats `json:"medium"`
 	UpdatedAt   time.Time     `json:"updated_at"`
 }
+
+// v2Launch is when the improved alert engine was deployed.
+// Performance is only measured from this date forward to exclude pre-improvement noise.
+var v2Launch = time.Date(2026, 3, 18, 0, 0, 0, 0, time.UTC)
 
 // perfCache avoids hitting Supabase on every landing page load.
 var (
@@ -1496,6 +1501,9 @@ func (h *Handler) AlertPerformance(w http.ResponseWriter, r *http.Request) {
 	perfCacheMu.Unlock()
 
 	since := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	if v2Launch.After(since) {
+		since = v2Launch
+	}
 	entries, err := h.db.GetAlertOutcomes(r.Context(), since)
 	if err != nil {
 		log.Printf("AlertPerformance: %v", err)
@@ -1548,8 +1556,13 @@ func (h *Handler) AlertPerformance(w http.ResponseWriter, r *http.Request) {
 		total += b.count
 	}
 
+	periodLabel := "30d"
+	if since.Equal(v2Launch) {
+		periodLabel = "since " + v2Launch.Format("Jan 2, 2006")
+	}
 	result := &alertPerformanceResponse{
-		Period:      "30d",
+		Period:      periodLabel,
+		PeriodStart: since,
 		TotalAlerts: total,
 		High:        toStats("high"),
 		Medium:      toStats("medium"),
