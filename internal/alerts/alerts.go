@@ -357,14 +357,9 @@ func (d *Detector) Analyze(snap models.MarketSnapshot, sigs models.MarketSignals
 		out = append(out, a)
 	}
 
-	// ── Rule 7: Negative funding (low) ────────────────────────────────────────
-	if rate < -0.0001 && rate >= -0.0005 {
-		add("funding-negative",
-			fmt.Sprintf("Funding rate negative at %.4f%% — shorts paying longs, potential upward pressure. Watch for short squeeze rally.",
-				rate*100),
-			"low",
-		)
-	}
+	// Rule 7 removed: mildly negative funding (-0.0001 to -0.0005) fired too frequently
+	// on normal market conditions. The squeeze scenario is already covered by Rule 9
+	// (ShortSqueezeProbability >= 65), which requires multi-signal confirmation.
 
 	// ── Rule 9: Short squeeze probability high ─────────────────────────────────
 	if sigs.ShortSqueezeProbability >= 65 {
