@@ -267,7 +267,11 @@ func (w *Worker) buildBrief(
 		}
 	}
 
+	// Sentiment headline
+	summary := buildSentimentSummary(snapshots, symbols, topLongs, topShorts)
+
 	msg := fmt.Sprintf("🌅 <b>DerivLens Morning Brief</b> — %s UTC\n\n", dateStr)
+	msg += summary
 	msg += "<b>📊 Market Overview</b>\n" + overview
 	msg += "\n<b>🔥 Most Crowded Longs</b>\n" + longsStr + "\n"
 	msg += "\n<b>❄️ Most Crowded Shorts</b>\n" + shortsStr + "\n"
@@ -277,4 +281,105 @@ func (w *Worker) buildBrief(
 		msg += upgradeCTA
 	}
 	return msg
+}
+
+// buildSentimentSummary produces a 1–2 line headline that tells the trader
+// what the overall mood is and where the squeeze risk sits — before they
+// read any numbers.
+func buildSentimentSummary(snapshots map[string]briefSnapshot, symbols []string, topLongs, topShorts []symLongPct) string {
+	if len(snapshots) == 0 {
+		return ""
+	}
+
+	// Average F&G across available symbols
+	var fgSum, fgCount float64
+	for _, sym := range symbols {
+		if bs, ok := snapshots[sym]; ok {
+			fgSum += float64(bs.fg.Score)
+			fgCount++
+		}
+	}
+	avgFG := fgSum / fgCount
+
+	// Overall sentiment word
+	var sentiment string
+	switch {
+	case avgFG >= 60:
+		sentiment = "Risk-on"
+	case avgFG <= 35:
+		sentiment = "Cautious"
+	case avgFG <= 45:
+		sentiment = "Neutral, leaning cautious"
+	default:
+		sentiment = "Neutral"
+	}
+
+	// Crowded side note
+	var crowdedNote string
+	if len(topLongs) > 0 && topLongs[0].longPct >= 68 {
+		var syms []string
+		for _, p := range topLongs {
+			if p.longPct >= 68 {
+				syms = append(syms, p.sym)
+			}
+		}
+		crowdedNote = "Longs overcrowded on " + strings.Join(syms, " + ") + "."
+	} else if len(topShorts) > 0 && (100-topShorts[0].longPct) >= 38 {
+		var syms []string
+		for _, p := range topShorts {
+			if (100 - p.longPct) >= 38 {
+				syms = append(syms, p.sym)
+			}
+		}
+		crowdedNote = "Shorts overcrowded on " + strings.Join(syms, " + ") + "."
+	}
+
+	// Squeeze risk: symbols with negative funding above 0.01% absolute
+	var negFunding, posFunding []string
+	for _, sym := range symbols {
+		bs, ok := snapshots[sym]
+		if !ok {
+			continue
+		}
+		rate := bs.snap.FundingRate.Rate * 100
+		absRate := rate
+		if absRate < 0 {
+			absRate = -absRate
+		}
+		if absRate < 0.01 {
+			continue
+		}
+		if rate < 0 {
+			negFunding = append(negFunding, fmt.Sprintf("%s (%.4f%%)", sym, rate))
+		} else {
+			posFunding = append(posFunding, fmt.Sprintf("%s (%.4f%%)", sym, rate))
+		}
+	}
+
+	var squeezeNote string
+	switch {
+	case len(negFunding) > 0 && len(posFunding) > 0:
+		squeezeNote = fmt.Sprintf(
+			"Negative funding on %s — short squeeze risk elevated. Positive funding on %s — longs paying up.",
+			strings.Join(negFunding, ", "), strings.Join(posFunding, ", "),
+		)
+	case len(negFunding) > 0:
+		squeezeNote = fmt.Sprintf("Negative funding on %s — short squeeze risk elevated.", strings.Join(negFunding, ", "))
+	case len(posFunding) > 0:
+		squeezeNote = fmt.Sprintf("Positive funding on %s — longs paying up, long squeeze risk if price drops.", strings.Join(posFunding, ", "))
+	}
+
+	// Compose summary block
+	line1 := fmt.Sprintf("<b>Sentiment: %s.</b>", sentiment)
+	if crowdedNote != "" {
+		line1 += " " + crowdedNote
+	}
+
+	var summary string
+	if squeezeNote != "" {
+		summary = line1 + "\n" + squeezeNote + "\n\n"
+	} else {
+		summary = line1 + "\n\n"
+	}
+	return summary
 }
