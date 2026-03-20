@@ -874,20 +874,31 @@ func formatUSDWorker(usd float64) string {
 	return fmt.Sprintf("$%.0f", usd)
 }
 
+// defaultThresholds are the baseline values applied when a subscriber has no saved rules
+// or has not configured a specific threshold. These match the frontend UI defaults.
+var defaultThresholds = map[string]float64{
+	"long_bias_threshold":     65.0,
+	"short_bias_threshold":    65.0,
+	"oi_divergence_threshold": 10.0,
+	"funding_spike_threshold": 0.05,
+}
+
 // shouldSendAlert checks whether a subscriber's rules JSONB permits a given alert.
 // Rules supports both boolean on/off flags and numeric thresholds:
 //
-//	{"funding_spike": true, "long_bias": true, "long_bias_threshold": 65.0}
+//	{"funding_spike": true, "long_bias": true, "long_bias_threshold": 73.0}
 //
-// An alert passes if its rule key is absent or true, and its Value meets any configured threshold.
+// Threshold resolution order:
+//  1. User's saved value for that key
+//  2. defaultThresholds fallback (matches frontend UI defaults)
+//
+// An alert passes if its rule key is absent or true, and its Value meets the threshold.
 func (w *Worker) shouldSendAlert(rules json.RawMessage, alert models.Alert) bool {
-	if len(rules) == 0 {
-		return true
-	}
-
 	var ruleMap map[string]interface{}
-	if err := json.Unmarshal(rules, &ruleMap); err != nil {
-		return true // fail open
+	if len(rules) > 0 {
+		if err := json.Unmarshal(rules, &ruleMap); err != nil {
+			return true // fail open on corrupt rules
+		}
 	}
 
 	ruleKey := alertRuleKey(alert.Message)
@@ -896,19 +907,28 @@ func (w *Worker) shouldSendAlert(rules json.RawMessage, alert models.Alert) bool
 	}
 
 	// Check boolean on/off flag
-	if raw, ok := ruleMap[ruleKey]; ok {
-		if b, ok := raw.(bool); ok && !b {
-			return false // rule explicitly disabled
+	if ruleMap != nil {
+		if raw, ok := ruleMap[ruleKey]; ok {
+			if b, ok := raw.(bool); ok && !b {
+				return false // rule explicitly disabled
+			}
 		}
 	}
 
-	// Check numeric threshold — alert.Value must be >= threshold to send
+	// Check numeric threshold — alert.Value must be >= threshold to send.
+	// User's saved value takes precedence; fall back to defaultThresholds.
 	if alert.Value > 0 {
 		threshKey := ruleKey + "_threshold"
-		if raw, ok := ruleMap[threshKey]; ok {
-			if threshold, ok := raw.(float64); ok && alert.Value < threshold {
-				return false // value below user's threshold
+		threshold := defaultThresholds[threshKey] // start with default
+		if ruleMap != nil {
+			if raw, ok := ruleMap[threshKey]; ok {
+				if saved, ok := raw.(float64); ok {
+					threshold = saved // override with user's value
+				}
 			}
+		}
+		if threshold > 0 && alert.Value < threshold {
+			return false
 		}
 	}
 
