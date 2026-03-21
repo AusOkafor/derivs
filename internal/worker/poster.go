@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
-	"os"
 	"strings"
 	"time"
 
-	"derivs-backend/internal/cards"
 	"derivs-backend/internal/models"
 )
 
@@ -62,13 +59,10 @@ func (w *Worker) generateAndSendPost(ctx context.Context) {
 	sa := snapshots[best]
 	post := formatPost(sa.snap, sa.sigs)
 
-	// Try to send as image card + caption; fall back to text-only
-	if sent := w.trySendPostWithCard(sa.snap, sa.sigs, post); !sent {
-		msg := fmt.Sprintf("📢 <b>SUGGESTED X POST</b>\n\n<code>%s</code>", post)
-		if err := w.notifier.SendToAdmin(msg); err != nil {
-			log.Printf("poster: failed to send post to admin: %v", err)
-			return
-		}
+	msg := fmt.Sprintf("📢 <b>SUGGESTED X POST</b>\n\n<code>%s</code>", post)
+	if err := w.notifier.SendToAdmin(msg); err != nil {
+		log.Printf("poster: failed to send post to admin: %v", err)
+		return
 	}
 	log.Printf("poster: sent suggested post for %s (score: %d)", best, bestScore)
 }
@@ -218,52 +212,3 @@ func formatClusterSize(v float64) string {
 	return fmt.Sprintf("$%.0fK", v/1_000)
 }
 
-// trySendPostWithCard generates a branded card image and sends it to the admin
-// as a photo with the tweet text as caption. Returns true on success.
-func (w *Worker) trySendPostWithCard(snap models.MarketSnapshot, sigs models.MarketSignals, post string) bool {
-	adminChatID := os.Getenv("ADMIN_TELEGRAM_CHAT_ID")
-	if adminChatID == "" {
-		return false
-	}
-	if sigs.LiquidationMagnet == nil {
-		return false
-	}
-
-	m := sigs.LiquidationMagnet
-	severity := "MEDIUM"
-	if m.Probability >= 80 || sigs.CascadeRisk.Level == "HIGH" || sigs.CascadeRisk.Level == "CRITICAL" {
-		severity = "HIGH"
-	}
-
-	gravityPct := math.Max(sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.DownwardPull)
-
-	data := cards.AlertCardData{
-		Symbol:       snap.Symbol,
-		Severity:     severity,
-		AlertType:    "Liquidity Sweep",
-		Price:        snap.LiquidationMap.CurrentPrice,
-		ClusterPrice: m.Price,
-		ClusterSize:  m.SizeUSD,
-		Distance:     m.Distance / 100,
-		SweepProb:    m.Probability,
-		CascadeLevel: sigs.CascadeRisk.Level,
-		CascadeScore: sigs.CascadeRisk.Score,
-		GravityDir:   sigs.LiquidityGravity.Dominant,
-		GravityPct:   gravityPct,
-		Funding:      snap.FundingRate.Rate,
-		OIChange:     snap.OpenInterest.OIChange1h,
-	}
-
-	imgBytes, err := cards.GenerateAlertCard(data)
-	if err != nil {
-		log.Printf("poster: card generation failed: %v", err)
-		return false
-	}
-
-	caption := fmt.Sprintf("📢 SUGGESTED X POST\n\n%s", post)
-	if err := w.notifier.SendPhoto(adminChatID, imgBytes, caption); err != nil {
-		log.Printf("poster: SendPhoto to admin failed: %v", err)
-		return false
-	}
-	return true
-}
