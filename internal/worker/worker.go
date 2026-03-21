@@ -129,6 +129,7 @@ func (w *Worker) Start(ctx context.Context) {
 	scheduleDaily(time.Date(0, 1, 1, 13, 0, 0, 0, time.UTC), func() {
 		go w.SendMorningBrief(context.Background())
 	})
+	w.schedulePoster()
 
 	freeTicker := time.NewTicker(5 * time.Minute)
 	proTicker := time.NewTicker(1 * time.Minute)
