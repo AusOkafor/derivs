@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"sync"
 	"time"
 
 	"derivs-backend/internal/aggregator"
@@ -10,10 +11,17 @@ import (
 	"derivs-backend/internal/cache"
 	"derivs-backend/internal/feargreed"
 	"derivs-backend/internal/liquidations"
+	"derivs-backend/internal/models"
 	"derivs-backend/internal/notify"
 	"derivs-backend/internal/supabase"
 	"derivs-backend/internal/worker"
 )
+
+// aiCacheEntry holds a cached AI analysis result with its expiry time.
+type aiCacheEntry struct {
+	result    models.AIAnalysis
+	expiresAt time.Time
+}
 
 type Handler struct {
 	aggregator         *aggregator.Aggregator
@@ -31,6 +39,11 @@ type Handler struct {
 	worker             *worker.Worker
 	liqFeed            *liquidations.Feed
 	startTime          time.Time
+
+	// aiCache stores AI analysis results per symbol for 5 minutes to avoid
+	// burning Claude tokens on every user refresh.
+	aiCacheMu sync.Mutex
+	aiCache   map[string]aiCacheEntry
 }
 
 func New(
@@ -64,5 +77,6 @@ func New(
 		worker:             wrk,
 		liqFeed:            liqFeed,
 		startTime:          time.Now(),
+		aiCache:            make(map[string]aiCacheEntry),
 	}
 }

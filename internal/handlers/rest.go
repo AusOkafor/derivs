@@ -155,13 +155,33 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	momentum := h.cache.GetPriceMomentum(symbol)
 	sigs := engine.Analyze(snap, momentum)
 
-	ai, err := h.analyzer.Analyze(ctx, snap, sigs, tier, userAPIKey, preferredModel)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
+	// Check AI cache before calling Claude — pro users share one result per symbol
+	// refreshed every 5 minutes, so rapid page refreshes don't burn tokens.
+	const aiCacheTTL = 5 * time.Minute
+	var ai models.AIAnalysis
+	if tier == "pro" {
+		h.aiCacheMu.Lock()
+		entry, hit := h.aiCache[symbol]
+		h.aiCacheMu.Unlock()
+		if hit && time.Now().Before(entry.expiresAt) {
+			ai = entry.result
 		}
-		sentry.CaptureException(err)
-		ai = models.AIAnalysis{Symbol: symbol, Summary: "Analysis temporarily unavailable", Sentiment: "neutral", Confidence: 0, GeneratedAt: time.Now().UTC()}
+	}
+	if ai.GeneratedAt.IsZero() {
+		var err error
+		ai, err = h.analyzer.Analyze(ctx, snap, sigs, tier, userAPIKey, preferredModel)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			sentry.CaptureException(err)
+			ai = models.AIAnalysis{Symbol: symbol, Summary: "Analysis temporarily unavailable", Sentiment: "neutral", Confidence: 0, GeneratedAt: time.Now().UTC()}
+		}
+		if tier == "pro" && ai.Summary != "Analysis temporarily unavailable" {
+			h.aiCacheMu.Lock()
+			h.aiCache[symbol] = aiCacheEntry{result: ai, expiresAt: time.Now().Add(aiCacheTTL)}
+			h.aiCacheMu.Unlock()
+		}
 	}
 	if ai.GeneratedAt.IsZero() {
 		ai = models.AIAnalysis{
