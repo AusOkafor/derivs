@@ -287,9 +287,14 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		} else {
 			log.Printf("[worker] free cycle found %d alerts for %s (raw: %d)", len(processedAlerts), sym, len(rawAlerts))
 		}
-		// Log every processed alert to alert_history (with current price for outcome tracking)
+		// Log cluster alerts to alert_history for outcome tracking.
+		// Regime alerts (ClusterSize == 0) are excluded — they have no price target
+		// and their outcomes are not meaningful for performance measurement.
 		currentPrice := snap.LiquidationMap.CurrentPrice
 		for _, alert := range processedAlerts {
+			if alert.ClusterSize == 0 {
+				continue
+			}
 			if err := w.db.LogAlertHistory(ctx, sym, alert.ID, alert.Message, alert.Severity, currentPrice); err != nil {
 				log.Printf("worker: LogAlertHistory(%s): %v", sym, err)
 			}
