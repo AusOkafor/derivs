@@ -111,15 +111,16 @@ func buildPrompt(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 		avgLong = sum / float64(len(snap.LongShortRatios))
 	}
 
-	return fmt.Sprintf(`You are a crypto derivatives analyst. Write like a trader talking to another trader — direct, specific, no hedging for its own sake.
+	return fmt.Sprintf(`You are a crypto derivatives analyst. Write like a trader talking to another trader — direct, specific, no hype.
 
 WRITING RULES:
 - 2-3 sentences maximum. No bullets, no arrows, no markdown.
-- Lead with the most actionable insight, not the regime label.
-- Name the specific price level that matters and what happens if it breaks.
-- If the signal is weak or mixed, say so in one sentence then give the one thing to watch.
-- Do not repeat numbers already obvious from the data labels (e.g. do not restate the regime name verbatim).
-- Do not use both "78%%" and "78.1%%" in the same sentence — pick one.
+- Lead with the specific price level that matters and what the setup is at that level.
+- Use at most ONE probability or percentage in the entire summary. If you use one, pick the single most important signal — do not stack multiple probability claims.
+- Never use "will" as a certainty. Use "watch for", "likely", or if/then framing instead.
+- Never say a move "will be violent", "will be aggressive", or similar — describe the setup, not the outcome.
+- If the signal is weak or mixed, say so plainly in one sentence then name the one level to watch.
+- Do not restate the regime label verbatim or repeat numbers already visible in the data.
 
 SYMBOL: %s
 MARKET REGIME: %s (Confidence: %d%%)
