@@ -126,13 +126,13 @@ SYMBOL: %s
 MARKET REGIME: %s (Confidence: %d%%)
 OI TREND: %s
 LEVERAGE IMBALANCE: %s
-SHORT SQUEEZE PROBABILITY: %d%%
-LONG SQUEEZE PROBABILITY: %d%%
+SHORT SQUEEZE RISK: %s
+LONG SQUEEZE RISK: %s
 %s
 
 LIQUIDITY GRAVITY:
-Dominant: %s (toward $%.0f, $%.2fM pool)
-Opposing side: toward $%.0f, $%.2fM pool
+Dominant: %s (toward $%.0f, %s depth)
+Opposing side: toward $%.0f (%s depth)
 
 VOLATILITY:
 State: %s (Score: %d/100)
@@ -172,14 +172,14 @@ Respond ONLY with valid JSON, no markdown:
 		sigs.Regime, sigs.RegimeConfidence,
 		sigs.OITrend,
 		sigs.LeverageImbalance,
-		sigs.ShortSqueezeProbability,
-		sigs.LongSqueezeProbability,
+		squeezeRiskLabel(sigs.ShortSqueezeProbability),
+		squeezeRiskLabel(sigs.LongSqueezeProbability),
 		formatMagnet(sigs.LiquidationMagnet),
 		sigs.LiquidityGravity.Dominant,
 		dominantTarget(sigs.LiquidityGravity),
-		dominantSize(sigs.LiquidityGravity),
+		depthLabel(dominantSize(sigs.LiquidityGravity)),
 		opposingTarget(sigs.LiquidityGravity),
-		opposingSize(sigs.LiquidityGravity),
+		depthLabel(opposingSize(sigs.LiquidityGravity)),
 		sigs.Volatility.State,
 		sigs.Volatility.Score,
 		sigs.Volatility.ExpectedMove,
@@ -244,6 +244,32 @@ func longShortLabel(longPct float64) string {
 		return "short-biased"
 	default:
 		return "heavily short"
+	}
+}
+
+func squeezeRiskLabel(prob int) string {
+	switch {
+	case prob >= 75:
+		return "high"
+	case prob >= 50:
+		return "elevated"
+	case prob >= 25:
+		return "moderate"
+	default:
+		return "low"
+	}
+}
+
+func depthLabel(sizeMillions float64) string {
+	switch {
+	case sizeMillions >= 5:
+		return "deep"
+	case sizeMillions >= 1:
+		return "moderate"
+	case sizeMillions >= 0.3:
+		return "thin"
+	default:
+		return "very thin"
 	}
 }
 
