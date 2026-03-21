@@ -119,69 +119,45 @@ func scoreSignal(snap models.MarketSnapshot, sigs models.MarketSignals) int {
 func formatPost(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 	symbol := snap.Symbol
 
-	// Direction
-	biasEmoji := "⚪"
-	biasLabel := "NEUTRAL"
-	lpi := sigs.LiquidityPressure.Score
-	if lpi >= 20 {
-		biasEmoji = "🟢"
-		biasLabel = "BULLISH"
-	} else if lpi <= -20 {
-		biasEmoji = "🔴"
-		biasLabel = "BEARISH"
-	}
-
-	// Magnet line
-	magnetLine := ""
-	timingLabel := ""
-	if sigs.LiquidationMagnet != nil {
-		m := sigs.LiquidationMagnet
-		sideLabel := strings.ToUpper(m.Side)
-		clusterStr := formatClusterSize(m.SizeUSD)
-		priceStr := formatPrice(m.Price)
-		magnetLine = fmt.Sprintf("%s %s cluster at %s — %d%% sweep probability",
-			clusterStr, sideLabel, priceStr, m.Probability)
-
-		if m.Distance < 0.3 {
-			timingLabel = "⚡ IMMINENT"
-		} else if m.Distance < 0.8 {
-			timingLabel = "⏳ FORMING"
-		} else {
-			timingLabel = "👀 WATCH"
-		}
-	}
-
-	// Cascade
-	cascadeLine := fmt.Sprintf("Cascade risk: %s (%d/100)", sigs.CascadeRisk.Level, sigs.CascadeRisk.Score)
-
-	// Long bias
 	avgLong := avgLongPct(snap)
-	longLine := fmt.Sprintf("%.0f%% longs across exchanges", avgLong)
-
-	// Funding
 	fundingPct := snap.FundingRate.Rate * 100
 	fundingSign := "+"
 	if fundingPct < 0 {
 		fundingSign = ""
 	}
-	fundingLine := fmt.Sprintf("Funding: %s%.4f%%", fundingSign, fundingPct)
 
-	// Build post
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("DerivLens — %s SIGNAL\n\n", symbol))
-	sb.WriteString(fmt.Sprintf("%s %s", biasEmoji, biasLabel))
-	if timingLabel != "" {
-		sb.WriteString(fmt.Sprintf(" — %s", timingLabel))
-	}
-	sb.WriteString("\n")
-	if magnetLine != "" {
-		sb.WriteString(magnetLine + "\n")
-	}
-	sb.WriteString(cascadeLine + "\n")
-	sb.WriteString(longLine + "\n")
-	sb.WriteString(fundingLine + "\n")
-	sb.WriteString("\nTrack live → derivlens.io")
 
+	if sigs.LiquidationMagnet != nil {
+		m := sigs.LiquidationMagnet
+		clusterStr := formatClusterSize(m.SizeUSD)
+		priceStr := formatPrice(m.Price)
+		sideLabel := strings.ToLower(m.Side)
+
+		// Line 1: symbol + cluster
+		sb.WriteString(fmt.Sprintf("%s — %s %s cluster at %s\n\n",
+			symbol, clusterStr, sideLabel, priceStr))
+
+		// Line 2: context
+		sb.WriteString(fmt.Sprintf("%.0f%% longs crowded, funding %s%.4f%%\n",
+			avgLong, fundingSign, fundingPct))
+
+		// Line 3: model read
+		sb.WriteString(fmt.Sprintf("Model shows %d%% probability price sweeps this level first.\n\n",
+			m.Probability))
+
+		// Line 4: what to watch
+		sb.WriteString(fmt.Sprintf("Watch the reaction at %s — sweep then reversal,\nor breakout. Direction confirms after the touch.\n\n",
+			priceStr))
+	} else {
+		// No magnet — regime-based post
+		sb.WriteString(fmt.Sprintf("%s — %s\n\n", symbol, string(sigs.Regime)))
+		sb.WriteString(fmt.Sprintf("%.0f%% longs, funding %s%.4f%%, cascade risk %s (%d/100)\n\n",
+			avgLong, fundingSign, fundingPct, sigs.CascadeRisk.Level, sigs.CascadeRisk.Score))
+		sb.WriteString("No strong liquidity magnet nearby — range conditions.\nFade extremes, wait for a trigger.\n\n")
+	}
+
+	sb.WriteString("Live data → derivlens.io")
 	return sb.String()
 }
 
