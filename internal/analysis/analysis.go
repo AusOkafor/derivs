@@ -131,9 +131,8 @@ LONG SQUEEZE PROBABILITY: %d%%
 %s
 
 LIQUIDITY GRAVITY:
-↑ Upward pull: %.1f%% toward $%.0f ($%.2fM)
-↓ Downward pull: %.1f%% toward $%.0f ($%.2fM)
-Dominant direction: %s
+Dominant: %s (toward $%.0f, $%.2fM pool)
+Opposing side: toward $%.0f, $%.2fM pool
 
 VOLATILITY:
 State: %s (Score: %d/100)
@@ -179,13 +178,11 @@ Respond ONLY with valid JSON, no markdown:
 		sigs.ShortSqueezeProbability,
 		sigs.LongSqueezeProbability,
 		formatMagnet(sigs.LiquidationMagnet),
-		sigs.LiquidityGravity.UpwardPull,
-		sigs.LiquidityGravity.UpwardTarget,
-		sigs.LiquidityGravity.UpwardSize/1_000_000,
-		sigs.LiquidityGravity.DownwardPull,
-		sigs.LiquidityGravity.DownwardTarget,
-		sigs.LiquidityGravity.DownwardSize/1_000_000,
 		sigs.LiquidityGravity.Dominant,
+		dominantTarget(sigs.LiquidityGravity),
+		dominantSize(sigs.LiquidityGravity),
+		opposingTarget(sigs.LiquidityGravity),
+		opposingSize(sigs.LiquidityGravity),
 		sigs.Volatility.State,
 		sigs.Volatility.Score,
 		sigs.Volatility.ExpectedMove,
@@ -221,6 +218,37 @@ Respond ONLY with valid JSON, no markdown:
 		snap.OpenInterest.OIChange24h,
 		avgLong,
 	)
+}
+
+// dominantTarget/dominantSize/opposingTarget/opposingSize return the correct
+// gravity targets based on which direction is dominant, so the prompt shows
+// qualitative direction without exposing raw pull percentages to Claude.
+func dominantTarget(g models.LiquidityGravity) float64 {
+	if g.UpwardPull >= g.DownwardPull {
+		return g.UpwardTarget
+	}
+	return g.DownwardTarget
+}
+
+func dominantSize(g models.LiquidityGravity) float64 {
+	if g.UpwardPull >= g.DownwardPull {
+		return g.UpwardSize / 1_000_000
+	}
+	return g.DownwardSize / 1_000_000
+}
+
+func opposingTarget(g models.LiquidityGravity) float64 {
+	if g.UpwardPull >= g.DownwardPull {
+		return g.DownwardTarget
+	}
+	return g.UpwardTarget
+}
+
+func opposingSize(g models.LiquidityGravity) float64 {
+	if g.UpwardPull >= g.DownwardPull {
+		return g.DownwardSize / 1_000_000
+	}
+	return g.UpwardSize / 1_000_000
 }
 
 func formatMagnet(m *models.LiquidationMagnet) string {
@@ -279,8 +307,18 @@ func (a *Analyzer) Analyze(ctx context.Context, snap models.MarketSnapshot, sigs
 	reqBody := anthropicRequest{
 		Model:     model,
 		MaxTokens: 1024,
-		System:    "You are a crypto derivatives analyst writing for experienced traders. Be direct and specific. Respond with valid JSON only — no markdown, no explanation outside the JSON.",
-		Messages:  []anthropicMessage{{Role: "user", Content: prompt}},
+		System: `You are a crypto derivatives analyst writing for experienced traders.
+
+OUTPUT FORMAT: Respond with valid JSON only — no markdown, no text outside the JSON object.
+
+WRITING RULES (hard constraints — any violation makes the response unusable):
+- 2-3 sentences. No bullets, no arrows, no markdown inside the summary string.
+- Lead with the specific price level and the setup at that level.
+- ONE number permitted in the entire summary. That number must be the liquidation magnet sweep probability. Never cite long/short ratios, liquidity gravity percentages, cascade scores, squeeze probabilities, or any other percentage.
+- No certainty language: never use "will". Use "watch for", "likely", or if/then framing.
+- Never describe a potential move as "violent", "aggressive", or "explosive".
+- Do not restate regime labels or numbers already shown in the dashboard panels.`,
+		Messages: []anthropicMessage{{Role: "user", Content: prompt}},
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
