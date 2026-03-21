@@ -57,6 +57,16 @@ func (w *Worker) generateAndSendPost(ctx context.Context) {
 	}
 
 	sa := snapshots[best]
+
+	// Enforce per-symbol minimum cluster size — small clusters on large caps aren't tweet-worthy.
+	if sa.sigs.LiquidationMagnet != nil {
+		minCluster := minClusterUSD(best)
+		if sa.sigs.LiquidationMagnet.SizeUSD < minCluster {
+			log.Printf("poster: %s cluster too small (%.0f < %.0f), skipping", best, sa.sigs.LiquidationMagnet.SizeUSD, minCluster)
+			return
+		}
+	}
+
 	post := formatPost(sa.snap, sa.sigs)
 
 	msg := fmt.Sprintf("📢 <b>SUGGESTED X POST</b>\n\n<code>%s</code>", post)
@@ -65,6 +75,19 @@ func (w *Worker) generateAndSendPost(ctx context.Context) {
 		return
 	}
 	log.Printf("poster: sent suggested post for %s (score: %d)", best, bestScore)
+}
+
+// minClusterUSD returns the minimum liquidation cluster size required before posting for a symbol.
+// Large caps need bigger clusters to be tweet-worthy.
+func minClusterUSD(symbol string) float64 {
+	switch symbol {
+	case "BTCUSDT":
+		return 1_000_000 // $1M minimum for BTC
+	case "ETHUSDT":
+		return 500_000 // $500K minimum for ETH
+	default:
+		return 150_000 // $150K for alts
+	}
 }
 
 // scoreSignal returns a 0-100+ score indicating how actionable the current signal is.
