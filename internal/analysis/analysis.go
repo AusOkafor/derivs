@@ -116,14 +116,15 @@ func buildPrompt(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 WRITING RULES (treat these as hard constraints — violating them makes the response unusable):
 - 2-3 sentences maximum. No bullets, no arrows, no markdown.
 - Lead with the specific price level and what the setup is at that level.
-- ONE number allowed in the entire summary. If you use a number, it must be the liquidation magnet sweep probability only. Never cite liquidity gravity percentages, squeeze probabilities, cascade scores, or any other percentage from the data.
+- ONE number allowed in the entire summary. That number must be the sweep probability from the LIQUIDATION MAGNET line — written exactly as it appears (e.g. "95% sweep probability"). No other numbers, percentages, or scores.
+- Never invent or calculate a percentage. If a number is not in the LIQUIDATION MAGNET line, do not use it.
 - Never use "will" as a certainty — use "watch for", "likely", or if/then framing.
-- Never describe a potential move as "violent", "aggressive", "explosive", or similar — describe the setup, not the outcome.
-- Do not restate regime labels, OI trend names, or numbers already shown in the dashboard panels.
+- Never describe a potential move as "violent", "aggressive", or "explosive" — describe the setup, not the outcome.
+- Do not restate regime labels, OI trend names, or scores already shown in the dashboard panels.
 - If signal is weak or mixed, say so in one sentence and name the one level to watch.
 
 SYMBOL: %s
-MARKET REGIME: %s (Confidence: %d%%)
+MARKET REGIME: %s
 OI TREND: %s
 LEVERAGE IMBALANCE: %s
 SHORT SQUEEZE RISK: %s
@@ -135,7 +136,7 @@ Dominant: %s (toward $%.0f, %s depth)
 Opposing side: toward $%.0f (%s depth)
 
 VOLATILITY:
-State: %s (Score: %d/100)
+State: %s
 Expected Move: %s
 Triggers: %s
 
@@ -169,7 +170,7 @@ Respond ONLY with valid JSON, no markdown:
   "confidence": 0-100
 }`,
 		snap.Symbol,
-		sigs.Regime, sigs.RegimeConfidence,
+		sigs.Regime,
 		sigs.OITrend,
 		sigs.LeverageImbalance,
 		squeezeRiskLabel(sigs.ShortSqueezeProbability),
@@ -181,7 +182,6 @@ Respond ONLY with valid JSON, no markdown:
 		opposingTarget(sigs.LiquidityGravity),
 		depthLabel(opposingSize(sigs.LiquidityGravity)),
 		sigs.Volatility.State,
-		sigs.Volatility.Score,
 		sigs.Volatility.ExpectedMove,
 		strings.Join(sigs.Volatility.Triggers, ", "),
 		sigs.StopHunt.TargetSide,
