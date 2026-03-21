@@ -134,30 +134,35 @@ func formatPost(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 		priceStr := formatPrice(m.Price)
 		sideLabel := strings.ToLower(m.Side)
 
-		// Line 1: symbol + cluster
-		sb.WriteString(fmt.Sprintf("%s — %s %s cluster at %s\n\n",
-			symbol, clusterStr, sideLabel, priceStr))
+		// Series header
+		sb.WriteString("DerivLens — Liquidity Watch\n\n")
 
-		// Line 2: context
+		// Line 1: symbol + cluster
+		sb.WriteString(fmt.Sprintf("%s — %s %s cluster at %s\n", symbol, clusterStr, sideLabel, priceStr))
+		sb.WriteString("Liquidity in focus.\n\n")
+
+		// Line 2: context block
+		sb.WriteString("Context:\n")
 		sb.WriteString(fmt.Sprintf("• %.0f%% longs (crowded)\n• Funding: %s%.4f%%\n\n",
 			avgLong, fundingSign, fundingPct))
 
-		// Line 3: model read + hook
-		sb.WriteString("Model favors a sweep of the level first.\n")
-		sb.WriteString("Liquidity in focus.\n\n")
+		// Line 3: model read
+		sb.WriteString("Model favors a sweep first.\n\n")
 
 		// Line 4: plan — anchor price in plan
 		sb.WriteString(fmt.Sprintf("Plan:\nWatch reaction at %s\nSweep → reversal or continuation\n\n", priceStr))
 		sb.WriteString("No confirmation = no trade.\n\n")
 	} else {
 		// No magnet — regime-based post
+		sb.WriteString("DerivLens — Liquidity Watch\n\n")
 		sb.WriteString(fmt.Sprintf("%s — %s\n\n", symbol, string(sigs.Regime)))
-		sb.WriteString(fmt.Sprintf("%.0f%% longs, funding %s%.4f%%, cascade risk %s (%d/100)\n\n",
+		sb.WriteString("Context:\n")
+		sb.WriteString(fmt.Sprintf("• %.0f%% longs, funding %s%.4f%%\n• Cascade risk %s (%d/100)\n\n",
 			avgLong, fundingSign, fundingPct, sigs.CascadeRisk.Level, sigs.CascadeRisk.Score))
 		sb.WriteString("No strong liquidity magnet nearby — range conditions.\nFade extremes, wait for a trigger.\n\n")
 	}
 
-	sb.WriteString("Live data → derivlens.io")
+	sb.WriteString("Track live → derivlens.io")
 	return sb.String()
 }
 
