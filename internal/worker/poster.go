@@ -143,12 +143,11 @@ func formatPost(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 			avgLong, fundingSign, fundingPct))
 
 		// Line 3: model read
-		sb.WriteString(fmt.Sprintf("Model shows %d%% probability price sweeps this level first.\n\n",
-			m.Probability))
+		sb.WriteString("Model favors a sweep of " + priceStr + " first.\n\n")
 
-		// Line 4: what to watch
-		sb.WriteString(fmt.Sprintf("Watch the reaction at %s — sweep then reversal,\nor breakout. Direction confirms after the touch.\n\n",
-			priceStr))
+		// Line 4: plan
+		sb.WriteString("Plan:\nWatch the reaction at the level\nSweep → reversal or continuation\n\n")
+		sb.WriteString("No confirmation = no trade.\n\n")
 	} else {
 		// No magnet — regime-based post
 		sb.WriteString(fmt.Sprintf("%s — %s\n\n", symbol, string(sigs.Regime)))
