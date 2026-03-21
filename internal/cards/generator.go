@@ -123,7 +123,11 @@ func GenerateAlertCard(data AlertCardData) ([]byte, error) {
 	drawText(img, 80, 426, formatPrice(data.ClusterPrice), severityColor, true)
 
 	drawText(img, 80, 510, "Distance", textMuted, false)
-	drawText(img, 80, 556, fmt.Sprintf("%.2f%%", data.Distance*100), textPrimary, false)
+	distStr := fmt.Sprintf("%.2f%%", data.Distance*100)
+	if data.Distance*100 < 0.01 {
+		distStr = "< 0.01%"
+	}
+	drawText(img, 80, 556, distStr, textPrimary, false)
 
 	drawText(img, 80, 640, "Cluster Size", textMuted, false)
 	drawText(img, 80, 686, formatUSD(data.ClusterSize), textPrimary, false)

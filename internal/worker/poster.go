@@ -174,7 +174,7 @@ func formatPost(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 
 	// Build post
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📊 %s — SIGNAL DETECTED\n\n", symbol))
+	sb.WriteString(fmt.Sprintf("DerivLens — %s SIGNAL\n\n", symbol))
 	sb.WriteString(fmt.Sprintf("%s %s", biasEmoji, biasLabel))
 	if timingLabel != "" {
 		sb.WriteString(fmt.Sprintf(" — %s", timingLabel))
