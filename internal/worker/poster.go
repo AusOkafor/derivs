@@ -139,14 +139,15 @@ func formatPost(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 			symbol, clusterStr, sideLabel, priceStr))
 
 		// Line 2: context
-		sb.WriteString(fmt.Sprintf("%.0f%% longs crowded, funding %s%.4f%%\n",
+		sb.WriteString(fmt.Sprintf("• %.0f%% longs (crowded)\n• Funding: %s%.4f%%\n\n",
 			avgLong, fundingSign, fundingPct))
 
-		// Line 3: model read
-		sb.WriteString("Model favors a sweep of " + priceStr + " first.\n\n")
+		// Line 3: model read + hook
+		sb.WriteString("Model favors a sweep of the level first.\n")
+		sb.WriteString("Liquidity in focus.\n\n")
 
-		// Line 4: plan
-		sb.WriteString("Plan:\nWatch the reaction at the level\nSweep → reversal or continuation\n\n")
+		// Line 4: plan — anchor price in plan
+		sb.WriteString(fmt.Sprintf("Plan:\nWatch reaction at %s\nSweep → reversal or continuation\n\n", priceStr))
 		sb.WriteString("No confirmation = no trade.\n\n")
 	} else {
 		// No magnet — regime-based post
