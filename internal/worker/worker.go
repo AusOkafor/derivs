@@ -287,12 +287,14 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		} else {
 			log.Printf("[worker] free cycle found %d alerts for %s (raw: %d)", len(processedAlerts), sym, len(rawAlerts))
 		}
-		// Log cluster alerts to alert_history for outcome tracking.
-		// Regime alerts (ClusterSize == 0) are excluded — they have no price target
-		// and their outcomes are not meaningful for performance measurement.
+		// Log alerts to alert_history for outcome tracking.
+		// Long/short ratio bias alerts are excluded — they observe a condition but have
+		// no price target or timing signal, so their outcomes are noise.
+		// All other alert types (cluster sweeps, OI events, funding, liquidation events)
+		// have actionable signals and are worth tracking.
 		currentPrice := snap.LiquidationMap.CurrentPrice
 		for _, alert := range processedAlerts {
-			if alert.ClusterSize == 0 {
+			if alert.RuleKey == "long_bias" || alert.RuleKey == "short_bias" {
 				continue
 			}
 			if err := w.db.LogAlertHistory(ctx, sym, alert.ID, alert.Message, alert.Severity, currentPrice); err != nil {
