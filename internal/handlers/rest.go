@@ -1284,6 +1284,19 @@ func (h *Handler) AIStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ai_enabled": analysis.IsAIEnabled()})
 }
 
+// TriggerPost handles POST /api/admin/poster/trigger — fires a post generation immediately.
+func (h *Handler) TriggerPost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	go h.worker.TriggerPost(r.Context())
+	writeJSON(w, http.StatusOK, map[string]string{"status": "post generation triggered"})
+}
+
 // ─── Custom price alert limits by tier ───────────────────────────────────────
 
 const (

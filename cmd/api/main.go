@@ -123,6 +123,7 @@ func main() {
 	mux.HandleFunc("/api/admin/ai/pause", h.PauseAI)
 	mux.HandleFunc("/api/admin/ai/resume", h.ResumeAI)
 	mux.HandleFunc("/api/admin/ai/status", h.AIStatus)
+	mux.HandleFunc("/api/admin/poster/trigger", h.TriggerPost)
 	mux.Handle("/ws", websocket.Handler(hub.ServeWS))
 
 	log.Printf("derivlens: listening on %s", cfg.Addr())

@@ -25,6 +25,11 @@ func (w *Worker) schedulePoster() {
 	}
 }
 
+// TriggerPost allows external callers (e.g. admin handler) to fire a post immediately.
+func (w *Worker) TriggerPost(ctx context.Context) {
+	w.generateAndSendPost(ctx)
+}
+
 // generateAndSendPost scans all cached snapshots, picks the strongest signal,
 // formats a tweet-ready post, and sends it to the admin via Telegram.
 func (w *Worker) generateAndSendPost(ctx context.Context) {
