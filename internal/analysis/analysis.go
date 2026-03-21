@@ -139,31 +139,28 @@ State: %s (Score: %d/100)
 Expected Move: %s
 Triggers: %s
 
-STOP HUNT PROBABILITY:
-Short side hunted first: %d%%
-Long side hunted first: %d%%
+STOP HUNT:
 Target: %s side near $%.0f
 Reasoning: %s
 
 EXCHANGE DIVERGENCE:
-Detected: %v (spread: %.1f%%)
-%s long-heavy: %.1f%% | %s short-heavy: %.1f%%
+Detected: %v — %s long-heavy, %s short-heavy
 Signal: %s
 
-FUNDING VELOCITY: %s (%.4f%%/hr) %s
-OI DELTA: %s (%.1f%% in 1h) %s
+FUNDING VELOCITY: %s — %s
+OI DELTA: %s — %s
 
-LIQUIDATION CASCADE RISK: %s (%d/100)
+LIQUIDATION CASCADE RISK: %s
 %s
 Factors: %s
 
-LIQUIDITY PRESSURE INDEX: %d/100 (%s)
+LIQUIDITY PRESSURE: %s
 %s
 
 RAW DATA:
 Funding Rate: %.4f%%
-Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
-Long/Short: %.1f%% longs
+Open Interest: $%.2fM (1h: %s, 24h: %s)
+Long/Short: %s
 
 Respond ONLY with valid JSON, no markdown:
 {
@@ -187,42 +184,69 @@ Respond ONLY with valid JSON, no markdown:
 		sigs.Volatility.Score,
 		sigs.Volatility.ExpectedMove,
 		strings.Join(sigs.Volatility.Triggers, ", "),
-		sigs.StopHunt.ShortSideProb,
-		sigs.StopHunt.LongSideProb,
 		sigs.StopHunt.TargetSide,
 		sigs.StopHunt.TargetPrice,
 		sigs.StopHunt.Reasoning,
 		sigs.ExchangeDivergence.Detected,
-		sigs.ExchangeDivergence.MaxSpread,
 		sigs.ExchangeDivergence.BullishEx,
-		sigs.ExchangeDivergence.BullishPct,
 		sigs.ExchangeDivergence.BearishEx,
-		sigs.ExchangeDivergence.BearishPct,
 		sigs.ExchangeDivergence.Signal,
 		sigs.FundingVelocity.Direction,
-		sigs.FundingVelocity.RatePerHour,
 		sigs.FundingVelocity.Description,
 		sigs.OIDelta.Velocity,
-		sigs.OIDelta.ChangePercent,
 		sigs.OIDelta.Description,
 		sigs.CascadeRisk.Level,
-		sigs.CascadeRisk.Score,
 		sigs.CascadeRisk.Description,
 		strings.Join(sigs.CascadeRisk.Factors, "; "),
-		sigs.LiquidityPressure.Score,
 		sigs.LiquidityPressure.Label,
 		sigs.LiquidityPressure.Description,
 		snap.FundingRate.Rate*100,
 		snap.OpenInterest.OIUsd/1_000_000,
-		snap.OpenInterest.OIChange1h,
-		snap.OpenInterest.OIChange24h,
-		avgLong,
+		oiChangeLabel(snap.OpenInterest.OIChange1h),
+		oiChangeLabel(snap.OpenInterest.OIChange24h),
+		longShortLabel(avgLong),
 	)
 }
 
 // dominantTarget/dominantSize/opposingTarget/opposingSize return the correct
 // gravity targets based on which direction is dominant, so the prompt shows
 // qualitative direction without exposing raw pull percentages to Claude.
+// oiChangeLabel converts a raw OI change percentage into a qualitative label.
+func oiChangeLabel(pct float64) string {
+	switch {
+	case pct > 5:
+		return "rising sharply"
+	case pct > 1:
+		return "rising"
+	case pct > -1:
+		return "flat"
+	case pct > -5:
+		return "falling"
+	default:
+		return "falling sharply"
+	}
+}
+
+// longShortLabel converts a long percentage into a qualitative positioning label.
+func longShortLabel(longPct float64) string {
+	switch {
+	case longPct > 70:
+		return "heavily long"
+	case longPct > 60:
+		return "long-biased"
+	case longPct > 55:
+		return "slightly long"
+	case longPct >= 45:
+		return "balanced"
+	case longPct >= 40:
+		return "slightly short"
+	case longPct >= 30:
+		return "short-biased"
+	default:
+		return "heavily short"
+	}
+}
+
 func dominantTarget(g models.LiquidityGravity) float64 {
 	if g.UpwardPull >= g.DownwardPull {
 		return g.UpwardTarget
