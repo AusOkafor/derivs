@@ -111,57 +111,64 @@ func buildPrompt(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 		avgLong = sum / float64(len(snap.LongShortRatios))
 	}
 
-	return fmt.Sprintf(`You are a crypto derivatives analyst. Write like a trader talking to another trader — direct, specific, no hype.
+	return fmt.Sprintf(`You are a crypto derivatives analyst writing for experienced traders.
 
-WRITING RULES (treat these as hard constraints — violating them makes the response unusable):
-- 2-3 sentences maximum. No bullets, no arrows, no markdown.
-- Lead with the specific price level and what the setup is at that level.
-- ONE number allowed in the entire summary. That number must be the sweep probability from the LIQUIDATION MAGNET line — written exactly as it appears (e.g. "95% sweep probability"). No other numbers, percentages, or scores.
-- Never invent or calculate a percentage. If a number is not in the LIQUIDATION MAGNET line, do not use it.
-- Never use "will" as a certainty — use "watch for", "likely", or if/then framing.
-- Never describe a potential move as "violent", "aggressive", or "explosive" — describe the setup, not the outcome.
-- Do not restate regime labels, OI trend names, or scores already shown in the dashboard panels.
-- If signal is weak or mixed, say so in one sentence and name the one level to watch.
+Write EXACTLY 2 sentences using this structure:
+
+SENTENCE 1: Name the key price level and the setup. If a liquidation magnet exists, include its sweep probability. No other numbers.
+Format: "[Symbol] approaching $[price] — [one-line setup description]. Sweep probability: [N]%%." OR combine naturally.
+
+SENTENCE 2: One qualitative observation about positioning or momentum and a watch condition.
+Format: "[Qualitative signal] — watch for [if/then condition]."
+
+HARD RULES:
+- The ONLY numbers permitted are: the price level from the magnet, and the sweep probability. No percentages, ratios, or scores from any other section.
+- Use all other data (exchange divergence, funding, OI, long/short ratios) to form qualitative words only — never quote those numbers.
+- No "will" — use "watch for", "likely", "if/then".
+- No outcome predictions ("violent", "explosive", "aggressive").
+- No bullets, no markdown.
 
 SYMBOL: %s
-MARKET REGIME: %s
+MARKET REGIME: %s (confidence: %d%%)
 OI TREND: %s
 LEVERAGE IMBALANCE: %s
-SHORT SQUEEZE RISK: %s
-LONG SQUEEZE RISK: %s
+SHORT SQUEEZE PROBABILITY: %d%%
+LONG SQUEEZE PROBABILITY: %d%%
 %s
 
 LIQUIDITY GRAVITY:
-Dominant: %s (toward $%.0f, %s depth)
-Opposing side: toward $%.0f (%s depth)
+Dominant direction: %s (%.1f%% pull toward $%.0f, $%.2fM pool)
+Opposing: %.1f%% pull toward $%.0f, $%.2fM pool
 
 VOLATILITY:
-State: %s
+State: %s (score: %d/100)
 Expected Move: %s
 Triggers: %s
 
 STOP HUNT:
+Short side probability: %d%%
+Long side probability: %d%%
 Target: %s side near $%.0f
 Reasoning: %s
 
 EXCHANGE DIVERGENCE:
-Detected: %v — %s long-heavy, %s short-heavy
+Detected: %v (spread: %.1f%%)
+%s longs: %.1f%% | %s longs: %.1f%%
 Signal: %s
 
-FUNDING VELOCITY: %s — %s
-OI DELTA: %s — %s
+FUNDING VELOCITY: %s (%.4f%%/hr) — %s
+OI DELTA: %s (%.1f%% in 1h) — %s
 
-LIQUIDATION CASCADE RISK: %s
+LIQUIDATION CASCADE RISK: %s (%d/100)
 %s
-Factors: %s
 
-LIQUIDITY PRESSURE: %s
+LIQUIDITY PRESSURE INDEX: %d (%s)
 %s
 
 RAW DATA:
 Funding Rate: %.4f%%
-Open Interest: $%.2fM (1h: %s, 24h: %s)
-Long/Short: %s
+Open Interest: $%.2fM (1h: %.1f%%, 24h: %.1f%%)
+Long/Short: %.1f%% longs (use for judgment only — do not quote this number)
 
 Respond ONLY with valid JSON, no markdown:
 {
@@ -170,41 +177,38 @@ Respond ONLY with valid JSON, no markdown:
   "confidence": 0-100
 }`,
 		snap.Symbol,
-		sigs.Regime,
+		sigs.Regime, sigs.RegimeConfidence,
 		sigs.OITrend,
 		sigs.LeverageImbalance,
-		squeezeRiskLabel(sigs.ShortSqueezeProbability),
-		squeezeRiskLabel(sigs.LongSqueezeProbability),
+		sigs.ShortSqueezeProbability,
+		sigs.LongSqueezeProbability,
 		formatMagnet(sigs.LiquidationMagnet),
 		sigs.LiquidityGravity.Dominant,
-		dominantTarget(sigs.LiquidityGravity),
-		depthLabel(dominantSize(sigs.LiquidityGravity)),
-		opposingTarget(sigs.LiquidityGravity),
-		depthLabel(opposingSize(sigs.LiquidityGravity)),
-		sigs.Volatility.State,
+		sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.UpwardTarget, sigs.LiquidityGravity.UpwardSize/1_000_000,
+		sigs.LiquidityGravity.DownwardPull, sigs.LiquidityGravity.DownwardTarget, sigs.LiquidityGravity.DownwardSize/1_000_000,
+		sigs.Volatility.State, sigs.Volatility.Score,
 		sigs.Volatility.ExpectedMove,
 		strings.Join(sigs.Volatility.Triggers, ", "),
+		sigs.StopHunt.ShortSideProb,
+		sigs.StopHunt.LongSideProb,
 		sigs.StopHunt.TargetSide,
 		sigs.StopHunt.TargetPrice,
 		sigs.StopHunt.Reasoning,
-		sigs.ExchangeDivergence.Detected,
-		sigs.ExchangeDivergence.BullishEx,
-		sigs.ExchangeDivergence.BearishEx,
+		sigs.ExchangeDivergence.Detected, sigs.ExchangeDivergence.MaxSpread,
+		sigs.ExchangeDivergence.BullishEx, sigs.ExchangeDivergence.BullishPct,
+		sigs.ExchangeDivergence.BearishEx, sigs.ExchangeDivergence.BearishPct,
 		sigs.ExchangeDivergence.Signal,
-		sigs.FundingVelocity.Direction,
-		sigs.FundingVelocity.Description,
-		sigs.OIDelta.Velocity,
-		sigs.OIDelta.Description,
-		sigs.CascadeRisk.Level,
+		sigs.FundingVelocity.Direction, sigs.FundingVelocity.RatePerHour, sigs.FundingVelocity.Description,
+		sigs.OIDelta.Velocity, sigs.OIDelta.ChangePercent, sigs.OIDelta.Description,
+		sigs.CascadeRisk.Level, sigs.CascadeRisk.Score,
 		sigs.CascadeRisk.Description,
-		strings.Join(sigs.CascadeRisk.Factors, "; "),
-		sigs.LiquidityPressure.Label,
+		sigs.LiquidityPressure.Score, sigs.LiquidityPressure.Label,
 		sigs.LiquidityPressure.Description,
 		snap.FundingRate.Rate*100,
 		snap.OpenInterest.OIUsd/1_000_000,
-		oiChangeLabel(snap.OpenInterest.OIChange1h),
-		oiChangeLabel(snap.OpenInterest.OIChange24h),
-		longShortLabel(avgLong),
+		snap.OpenInterest.OIChange1h,
+		snap.OpenInterest.OIChange24h,
+		avgLong,
 	)
 }
 
