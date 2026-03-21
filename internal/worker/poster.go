@@ -79,14 +79,52 @@ func (w *Worker) generateAndSendPost(ctx context.Context) {
 
 // minClusterUSD returns the minimum liquidation cluster size required before posting for a symbol.
 // Large caps need bigger clusters to be tweet-worthy.
+// minClusterUSD returns the minimum liquidation cluster size required before posting.
+// Thresholds are calibrated per coin — large caps need bigger clusters to be tweet-worthy.
 func minClusterUSD(symbol string) float64 {
 	switch symbol {
+	// Tier 1 — mega caps: need large clusters to move price meaningfully
 	case "BTCUSDT":
-		return 1_000_000 // $1M minimum for BTC
+		return 1_000_000 // $1M
 	case "ETHUSDT":
-		return 500_000 // $500K minimum for ETH
+		return 750_000 // $750K
+	case "BNBUSDT":
+		return 500_000 // $500K
+	case "XRPUSDT":
+		return 400_000 // $400K
+
+	// Tier 2 — large caps: $300K+
+	case "SOLUSDT":
+		return 300_000
+	case "DOGEUSDT":
+		return 300_000
+	case "AVAXUSDT":
+		return 250_000
+	case "LINKUSDT":
+		return 250_000
+	case "TONUSDT":
+		return 250_000
+
+	// Tier 3 — mid caps: $150K+
+	case "ARBUSDT":
+		return 150_000
+	case "OPUSDT":
+		return 150_000
+	case "INJUSDT":
+		return 150_000
+	case "SUIUSDT":
+		return 150_000
+
+	// Tier 4 — smaller / newer: $100K+
+	case "WLDUSDT":
+		return 100_000
+	case "TIAUSDT":
+		return 100_000
+	case "PENDLEUSDT":
+		return 100_000
+
 	default:
-		return 150_000 // $150K for alts
+		return 150_000
 	}
 }
 
