@@ -19,6 +19,12 @@ const (
 	playbookScoreOverride = 15  // allow re-alert if new score exceeds previous by this much
 	playbookKlineInterval = "5m"
 	playbookKlineLimit    = 6 // 5 closed + 1 open (current)
+
+	// Follow-through: adaptive threshold = avgRangePct * this multiplier.
+	// E.g. if avg 5m range = 0.3% of price, threshold = 0.3 * 0.25 = 0.075%.
+	playbookFTMultiplier = 0.25
+	playbookFTMinPct     = 0.05 // floor: never below 0.05%
+	playbookFTMaxPct     = 0.30 // ceiling: never above 0.30%
 )
 
 // ── Cooldown with score memory ────────────────────────────────────────────────
@@ -28,8 +34,6 @@ type cooldownEntry struct {
 	score   int
 }
 
-// playbookCooldowns tracks fire time + score per "SYMBOL:level:stage" key.
-// A new signal can override the cooldown if its score beats the previous by ≥15.
 type playbookCooldowns struct {
 	mu      sync.Mutex
 	entries map[string]cooldownEntry
@@ -39,13 +43,14 @@ func newPlaybookCooldowns() *playbookCooldowns {
 	return &playbookCooldowns{entries: make(map[string]cooldownEntry)}
 }
 
+// allow returns true if the signal may fire. Within the cooldown window, a new
+// signal is only allowed if it scores at least playbookScoreOverride points higher.
 func (c *playbookCooldowns) allow(symbol string, level float64, stage string, newScore int) bool {
 	key := fmt.Sprintf("%s:%.2f:%s", symbol, level, stage)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if e, ok := c.entries[key]; ok && time.Since(e.firedAt) < playbookCooldown {
-		// Within cooldown — only allow if new score is meaningfully better
 		if newScore < e.score+playbookScoreOverride {
 			return false
 		}
@@ -57,51 +62,73 @@ func (c *playbookCooldowns) allow(symbol string, level float64, stage string, ne
 
 // ── Follow-through tracker ────────────────────────────────────────────────────
 
+// followThroughEntry tracks a confirmed signal through two time windows.
+//
+//	Stage 1 (10–20 min): did price move ≥ adaptive threshold in the right direction?
+//	                     records time-to-move if yes.
+//	Stage 2 (25–40 min): did it hold? (price still on right side of entry)
+//
+// Outcome classification:
+//
+//	clean win  — moved ≥ threshold AND held
+//	weak win   — moved ≥ threshold BUT reversed
+//	failure    — never moved ≥ threshold
 type followThroughEntry struct {
 	symbol    string
-	side      string  // cluster side: "long" or "short"
-	firePrice float64 // price when confirmed signal fired
+	side      string  // "long" or "short" cluster
+	firePrice float64 // mark price when confirmed signal fired
 	fireTime  time.Time
-	checked   bool
+	threshold float64 // adaptive % move required (e.g. 0.075)
+
+	// Stage 1
+	stage1Done  bool
+	movedAt     *time.Time // when price first crossed threshold
+	initialPct  float64    // actual % move at stage 1 check
+
+	// Stage 2
+	stage2Done bool
 }
 
 type followThroughTracker struct {
 	mu      sync.Mutex
-	pending []followThroughEntry
+	pending []*followThroughEntry
 }
 
 func newFollowThroughTracker() *followThroughTracker {
 	return &followThroughTracker{}
 }
 
-func (ft *followThroughTracker) record(symbol, side string, price float64) {
+func (ft *followThroughTracker) record(symbol, side string, firePrice, avgRangePct float64) {
+	threshold := math.Max(playbookFTMinPct, math.Min(playbookFTMaxPct, avgRangePct*playbookFTMultiplier))
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
-	ft.pending = append(ft.pending, followThroughEntry{
+	ft.pending = append(ft.pending, &followThroughEntry{
 		symbol:    symbol,
 		side:      side,
-		firePrice: price,
+		firePrice: firePrice,
 		fireTime:  time.Now(),
+		threshold: threshold,
 	})
 }
 
-// evaluate checks pending signals that are 10–20 min old against current prices.
-// Logs outcome: whether price moved in the expected direction. No alerts fired yet.
+// evaluate runs each cycle against current snapshot prices.
+// Stage 1: 10–20 min after fire — check initial move + time-to-move.
+// Stage 2: 25–40 min after fire — check if it held.
 func (ft *followThroughTracker) evaluate(snapshots map[string]symbolAlerts) {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
 
 	now := time.Now()
-	var remaining []followThroughEntry
+	var remaining []*followThroughEntry
+
 	for _, e := range ft.pending {
 		age := now.Sub(e.fireTime)
-		if age < 10*time.Minute {
-			remaining = append(remaining, e) // too early
+
+		// Drop expired entries
+		if age > 45*time.Minute {
 			continue
 		}
-		if age > 20*time.Minute || e.checked {
-			continue // expired, drop
-		}
+
 		sa, ok := snapshots[e.symbol]
 		if !ok {
 			remaining = append(remaining, e)
@@ -112,28 +139,59 @@ func (ft *followThroughTracker) evaluate(snapshots map[string]symbolAlerts) {
 			remaining = append(remaining, e)
 			continue
 		}
+
 		pctMove := (currentPrice - e.firePrice) / e.firePrice * 100
-		// Long cluster rejection expects price UP; short expects price DOWN.
-		worked := (e.side == "long" && pctMove > 0.1) || (e.side == "short" && pctMove < -0.1)
-		if worked {
-			log.Printf("[playbook:ft] ✅ %s %s rejection held — moved %.2f%% in target direction", e.symbol, e.side, math.Abs(pctMove))
-		} else {
-			log.Printf("[playbook:ft] ❌ %s %s rejection failed — moved %.2f%% (wrong direction)", e.symbol, e.side, pctMove)
+		movedInRightDirection := (e.side == "long" && pctMove >= e.threshold) ||
+			(e.side == "short" && pctMove <= -e.threshold)
+
+		// Stage 1: 10–20 min window
+		if !e.stage1Done && age >= 10*time.Minute && age <= 20*time.Minute {
+			e.stage1Done = true
+			e.initialPct = pctMove
+			if movedInRightDirection {
+				t := now
+				e.movedAt = &t
+				timeToMove := now.Sub(e.fireTime)
+				log.Printf("[playbook:ft] ✅ %s %s — initial move %.3f%% (threshold %.3f%%) | time-to-move: %s",
+					e.symbol, e.side, math.Abs(pctMove), e.threshold, timeToMove.Round(time.Second))
+			} else {
+				log.Printf("[playbook:ft] ⚠️ %s %s — no move yet (%.3f%% vs threshold %.3f%%)",
+					e.symbol, e.side, pctMove, e.threshold)
+			}
 		}
-		e.checked = true
+
+		// Stage 2: 25–40 min window (only meaningful if stage 1 passed)
+		if !e.stage2Done && age >= 25*time.Minute && age <= 40*time.Minute {
+			e.stage2Done = true
+			if e.movedAt == nil {
+				// Never moved — failure
+				log.Printf("[playbook:ft] ❌ %s %s — failure: never reached threshold (final %.3f%%)",
+					e.symbol, e.side, pctMove)
+			} else {
+				// Did it reverse? Check if price returned within 50% of the threshold move.
+				holdThreshold := e.threshold * 0.5
+				reversed := (e.side == "long" && pctMove < holdThreshold) ||
+					(e.side == "short" && pctMove > -holdThreshold)
+				if reversed {
+					log.Printf("[playbook:ft] ⚠️ %s %s — weak win: moved then reversed (init %.3f%% → now %.3f%%)",
+						e.symbol, e.side, e.initialPct, pctMove)
+				} else {
+					log.Printf("[playbook:ft] ✅ %s %s — clean win: held (init %.3f%% → now %.3f%%)",
+						e.symbol, e.side, e.initialPct, pctMove)
+				}
+			}
+			continue // done — drop from pending
+		}
+
+		remaining = append(remaining, e)
 	}
+
 	ft.pending = remaining
 }
 
 // ── Main trigger checker ──────────────────────────────────────────────────────
 
-// checkPlaybookTriggers scans pro-cycle snapshots for rejection candles at
-// liquidation cluster levels. Fires two stages:
-//
-//   - "forming"   — open candle has wick past cluster level (early warning)
-//   - "confirmed" — closed candle satisfies displacement + momentum + trend filter
 func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string]symbolAlerts) {
-	// Evaluate any pending follow-through checks first
 	w.followThrough.evaluate(snapshots)
 
 	for symbol, sa := range snapshots {
@@ -154,10 +212,16 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			continue
 		}
 
-		// Binance returns oldest-first; last candle is the current open candle.
 		currentCandle := candles[len(candles)-1]
 		closedCandles := candles[:len(candles)-1]
 		avgRange := averageCandleRange(closedCandles)
+		currentPrice := sa.snap.LiquidationMap.CurrentPrice
+
+		// avgRangePct: average 5m range as % of price — used for adaptive threshold
+		avgRangePct := 0.0
+		if currentPrice > 0 {
+			avgRangePct = avgRange / currentPrice * 100
+		}
 
 		// ── Stage 1: Forming ─────────────────────────────────────────────────
 		if wickPastLevel(currentCandle, m.Side, m.Price) {
@@ -186,27 +250,23 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 
 			candleRange := c.High - c.Low
 			if avgRange > 0 && candleRange < avgRange*playbookMinMomentum {
-				log.Printf("[playbook] %s closed candle too small (%.4f < %.4f avg), skipping", symbol, candleRange, avgRange*playbookMinMomentum)
+				log.Printf("[playbook] %s closed candle too small, skipping", symbol)
 				break
 			}
 
-			// Trend pressure penalty — strong trend continuation reduces score
 			trendPenalty := trendPressure(closedCandles, m.Side)
-
 			score := scoreRejection(wick, body, depth, m.Price, m.Side, sa.sigs.Regime, candleRange, avgRange)
 			score = max(0, score+trendPenalty)
 
 			aligned := isBiasAligned(m.Side, sa.sigs.Regime)
 			if w.playbookCooldown.allow(symbol, m.Price, "confirmed", score) {
-				currentPrice := sa.snap.LiquidationMap.CurrentPrice
 				msg := buildConfirmedAlert(symbol, m, sa.sigs, score, aligned)
-				log.Printf("[playbook] %s confirmed at %.4f score=%d aligned=%v trend_penalty=%d",
-					symbol, m.Price, score, aligned, trendPenalty)
+				log.Printf("[playbook] %s confirmed at %.4f score=%d aligned=%v trend_penalty=%d avg_range_pct=%.3f%%",
+					symbol, m.Price, score, aligned, trendPenalty, avgRangePct)
 				if err := w.notifier.SendToAdmin(msg); err != nil {
 					log.Printf("[playbook] SendToAdmin confirmed(%s): %v", symbol, err)
 				}
-				// Record for follow-through evaluation
-				w.followThrough.record(symbol, m.Side, currentPrice)
+				w.followThrough.record(symbol, m.Side, currentPrice, avgRangePct)
 			}
 			break
 		}
@@ -222,8 +282,6 @@ func wickPastLevel(c models.Kline, side string, clusterPrice float64) bool {
 	return c.High > clusterPrice
 }
 
-// rejectionMetrics returns (wickSize, bodyClose, penetrationDepth).
-// Returns (0,0,0) if no wick past the level.
 func rejectionMetrics(c models.Kline, side string, clusterPrice float64) (wick, body, depth float64) {
 	if side == "long" {
 		if c.Low >= clusterPrice {
@@ -254,33 +312,49 @@ func averageCandleRange(candles []models.Kline) float64 {
 	return sum / float64(len(candles))
 }
 
-// trendPressure returns a score penalty if the last 3 candles show strong
-// directional momentum against the expected rejection direction.
-// A long cluster expects price to bounce UP — if candles are trending down with
-// expanding range, the rejection is fighting the trend.
+// trendPressure returns a proportional score penalty based on how many of the
+// last 3 closed candles show expanding-range momentum against the expected
+// rejection direction.
+//
+//	2 opposing candles (moderate pressure)      → -10
+//	2 opposing candles + strong final expansion → -20
 func trendPressure(candles []models.Kline, side string) int {
 	if len(candles) < 3 {
 		return 0
 	}
 	last := candles[len(candles)-3:]
-	badCandles := 0
+	badCount := 0
+	strongExpansion := false
 	prevRange := last[0].High - last[0].Low
+
 	for i := 1; i < len(last); i++ {
 		r := last[i].High - last[i].Low
 		isBearish := last[i].Close < last[i].Open
 		isBullish := last[i].Close > last[i].Open
 		expanding := r >= prevRange*0.9
+
 		if side == "long" && isBearish && expanding {
-			badCandles++
+			badCount++
+			if r >= prevRange*1.5 {
+				strongExpansion = true
+			}
 		} else if side == "short" && isBullish && expanding {
-			badCandles++
+			badCount++
+			if r >= prevRange*1.5 {
+				strongExpansion = true
+			}
 		}
 		prevRange = r
 	}
-	if badCandles >= 2 {
-		return -20 // strong trend against us — downgrade
+
+	switch {
+	case badCount >= 2 && strongExpansion:
+		return -20
+	case badCount >= 2:
+		return -10
+	default:
+		return 0
 	}
-	return 0
 }
 
 // ── Signal scoring (0–100) ────────────────────────────────────────────────────
@@ -317,8 +391,6 @@ func scoreRejection(wick, body, depth, clusterPrice float64, side string, regime
 	return score
 }
 
-// isBiasAligned returns true when the cluster's sweep direction matches
-// the broader market regime.
 func isBiasAligned(side string, regime models.MarketRegime) bool {
 	if side == "long" {
 		return regime == models.RegimeLiquidation || regime == models.RegimeDistribution
