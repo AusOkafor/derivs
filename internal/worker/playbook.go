@@ -12,42 +12,130 @@ import (
 )
 
 const (
-	playbookProximityPct  = 0.3 // check when within 0.3% of cluster
+	playbookProximityPct  = 0.3 // trigger check when within 0.3% of cluster
 	playbookCooldown      = 30 * time.Minute
 	playbookDisplacementR = 0.3 // confirmed: close must reclaim >30% of wick
-	playbookMinMomentum   = 0.4 // candle range must be ≥40% of prior avg to count
+	playbookMinMomentum   = 0.4 // candle range must be ≥40% of prior avg
+	playbookScoreOverride = 15  // allow re-alert if new score exceeds previous by this much
 	playbookKlineInterval = "5m"
 	playbookKlineLimit    = 6 // 5 closed + 1 open (current)
 )
 
-// playbookCooldowns tracks the last fire time per "SYMBOL:level:stage" key.
-// Stage is "forming" or "confirmed" — each fires at most once per cooldown window.
+// ── Cooldown with score memory ────────────────────────────────────────────────
+
+type cooldownEntry struct {
+	firedAt time.Time
+	score   int
+}
+
+// playbookCooldowns tracks fire time + score per "SYMBOL:level:stage" key.
+// A new signal can override the cooldown if its score beats the previous by ≥15.
 type playbookCooldowns struct {
-	mu   sync.Mutex
-	last map[string]time.Time
+	mu      sync.Mutex
+	entries map[string]cooldownEntry
 }
 
 func newPlaybookCooldowns() *playbookCooldowns {
-	return &playbookCooldowns{last: make(map[string]time.Time)}
+	return &playbookCooldowns{entries: make(map[string]cooldownEntry)}
 }
 
-func (c *playbookCooldowns) allow(symbol string, level float64, stage string) bool {
+func (c *playbookCooldowns) allow(symbol string, level float64, stage string, newScore int) bool {
 	key := fmt.Sprintf("%s:%.2f:%s", symbol, level, stage)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if t, ok := c.last[key]; ok && time.Since(t) < playbookCooldown {
-		return false
+
+	if e, ok := c.entries[key]; ok && time.Since(e.firedAt) < playbookCooldown {
+		// Within cooldown — only allow if new score is meaningfully better
+		if newScore < e.score+playbookScoreOverride {
+			return false
+		}
+		log.Printf("[playbook] score override: %s %s prev=%d new=%d", symbol, stage, e.score, newScore)
 	}
-	c.last[key] = time.Now()
+	c.entries[key] = cooldownEntry{firedAt: time.Now(), score: newScore}
 	return true
 }
 
-// checkPlaybookTriggers scans pro-cycle snapshots for candle rejections at
+// ── Follow-through tracker ────────────────────────────────────────────────────
+
+type followThroughEntry struct {
+	symbol    string
+	side      string  // cluster side: "long" or "short"
+	firePrice float64 // price when confirmed signal fired
+	fireTime  time.Time
+	checked   bool
+}
+
+type followThroughTracker struct {
+	mu      sync.Mutex
+	pending []followThroughEntry
+}
+
+func newFollowThroughTracker() *followThroughTracker {
+	return &followThroughTracker{}
+}
+
+func (ft *followThroughTracker) record(symbol, side string, price float64) {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	ft.pending = append(ft.pending, followThroughEntry{
+		symbol:    symbol,
+		side:      side,
+		firePrice: price,
+		fireTime:  time.Now(),
+	})
+}
+
+// evaluate checks pending signals that are 10–20 min old against current prices.
+// Logs outcome: whether price moved in the expected direction. No alerts fired yet.
+func (ft *followThroughTracker) evaluate(snapshots map[string]symbolAlerts) {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+
+	now := time.Now()
+	var remaining []followThroughEntry
+	for _, e := range ft.pending {
+		age := now.Sub(e.fireTime)
+		if age < 10*time.Minute {
+			remaining = append(remaining, e) // too early
+			continue
+		}
+		if age > 20*time.Minute || e.checked {
+			continue // expired, drop
+		}
+		sa, ok := snapshots[e.symbol]
+		if !ok {
+			remaining = append(remaining, e)
+			continue
+		}
+		currentPrice := sa.snap.LiquidationMap.CurrentPrice
+		if currentPrice == 0 {
+			remaining = append(remaining, e)
+			continue
+		}
+		pctMove := (currentPrice - e.firePrice) / e.firePrice * 100
+		// Long cluster rejection expects price UP; short expects price DOWN.
+		worked := (e.side == "long" && pctMove > 0.1) || (e.side == "short" && pctMove < -0.1)
+		if worked {
+			log.Printf("[playbook:ft] ✅ %s %s rejection held — moved %.2f%% in target direction", e.symbol, e.side, math.Abs(pctMove))
+		} else {
+			log.Printf("[playbook:ft] ❌ %s %s rejection failed — moved %.2f%% (wrong direction)", e.symbol, e.side, pctMove)
+		}
+		e.checked = true
+	}
+	ft.pending = remaining
+}
+
+// ── Main trigger checker ──────────────────────────────────────────────────────
+
+// checkPlaybookTriggers scans pro-cycle snapshots for rejection candles at
 // liquidation cluster levels. Fires two stages:
 //
-//   - "forming"   — open candle has wick past the cluster level (early warning)
-//   - "confirmed" — a closed candle satisfies the displacement rule (actionable)
+//   - "forming"   — open candle has wick past cluster level (early warning)
+//   - "confirmed" — closed candle satisfies displacement + momentum + trend filter
 func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string]symbolAlerts) {
+	// Evaluate any pending follow-through checks first
+	w.followThrough.evaluate(snapshots)
+
 	for symbol, sa := range snapshots {
 		m := sa.sigs.LiquidationMagnet
 		if m == nil {
@@ -62,24 +150,21 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			log.Printf("[playbook] FetchKlines(%s): %v", symbol, err)
 			continue
 		}
-		// Need at least 2 candles: 1 closed reference + 1 current
 		if len(candles) < 2 {
 			continue
 		}
 
-		// Binance returns candles oldest-first; last entry is the current open candle.
+		// Binance returns oldest-first; last candle is the current open candle.
 		currentCandle := candles[len(candles)-1]
 		closedCandles := candles[:len(candles)-1]
-
-		// Average range of closed candles — used for momentum filter.
 		avgRange := averageCandleRange(closedCandles)
 
-		// ── Stage 1: Forming (current open candle) ───────────────────────────
+		// ── Stage 1: Forming ─────────────────────────────────────────────────
 		if wickPastLevel(currentCandle, m.Side, m.Price) {
 			candleRange := currentCandle.High - currentCandle.Low
 			if avgRange == 0 || candleRange >= avgRange*playbookMinMomentum {
-				if w.playbookCooldown.allow(symbol, m.Price, "forming") {
-					msg := buildFormingAlert(symbol, m, sa.sigs.Regime)
+				if w.playbookCooldown.allow(symbol, m.Price, "forming", 0) {
+					msg := buildFormingAlert(symbol, m, sa.sigs)
 					log.Printf("[playbook] %s forming at %.4f (prob=%d%%)", symbol, m.Price, m.Probability)
 					if err := w.notifier.SendToAdmin(msg); err != nil {
 						log.Printf("[playbook] SendToAdmin forming(%s): %v", symbol, err)
@@ -88,40 +173,48 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			}
 		}
 
-		// ── Stage 2: Confirmed (most recent closed candle first) ─────────────
+		// ── Stage 2: Confirmed ───────────────────────────────────────────────
 		for i := len(closedCandles) - 1; i >= 0; i-- {
 			c := closedCandles[i]
 			wick, body, depth := rejectionMetrics(c, m.Side, m.Price)
 			if wick == 0 {
-				continue // no wick past the level
+				continue
 			}
 			if body < wick*playbookDisplacementR {
-				continue // insufficient reclaim
+				continue
 			}
 
-			// Momentum: candle range vs average (excluding itself)
 			candleRange := c.High - c.Low
 			if avgRange > 0 && candleRange < avgRange*playbookMinMomentum {
-				log.Printf("[playbook] %s closed candle too small (%.4f < %.4f avg), skipping", symbol, candleRange, avgRange)
+				log.Printf("[playbook] %s closed candle too small (%.4f < %.4f avg), skipping", symbol, candleRange, avgRange*playbookMinMomentum)
 				break
 			}
 
+			// Trend pressure penalty — strong trend continuation reduces score
+			trendPenalty := trendPressure(closedCandles, m.Side)
+
 			score := scoreRejection(wick, body, depth, m.Price, m.Side, sa.sigs.Regime, candleRange, avgRange)
-			if w.playbookCooldown.allow(symbol, m.Price, "confirmed") {
-				msg := buildConfirmedAlert(symbol, m, sa.sigs.Regime, score)
-				log.Printf("[playbook] %s confirmed at %.4f score=%d (prob=%d%%)", symbol, m.Price, score, m.Probability)
+			score = max(0, score+trendPenalty)
+
+			aligned := isBiasAligned(m.Side, sa.sigs.Regime)
+			if w.playbookCooldown.allow(symbol, m.Price, "confirmed", score) {
+				currentPrice := sa.snap.LiquidationMap.CurrentPrice
+				msg := buildConfirmedAlert(symbol, m, sa.sigs, score, aligned)
+				log.Printf("[playbook] %s confirmed at %.4f score=%d aligned=%v trend_penalty=%d",
+					symbol, m.Price, score, aligned, trendPenalty)
 				if err := w.notifier.SendToAdmin(msg); err != nil {
 					log.Printf("[playbook] SendToAdmin confirmed(%s): %v", symbol, err)
 				}
+				// Record for follow-through evaluation
+				w.followThrough.record(symbol, m.Side, currentPrice)
 			}
-			break // only evaluate the most recent valid closed candle
+			break
 		}
 	}
 }
 
 // ── Candle analysis helpers ───────────────────────────────────────────────────
 
-// wickPastLevel returns true if the candle's wick crossed the cluster price.
 func wickPastLevel(c models.Kline, side string, clusterPrice float64) bool {
 	if side == "long" {
 		return c.Low < clusterPrice
@@ -129,10 +222,7 @@ func wickPastLevel(c models.Kline, side string, clusterPrice float64) bool {
 	return c.High > clusterPrice
 }
 
-// rejectionMetrics returns (wickSize, bodyClose, penetrationDepth) for a closed candle.
-// wickSize    = how far price moved past the cluster level
-// bodyClose   = how far the close reclaimed past the level
-// depth       = penetration depth (same as wickSize — exposed for scoring)
+// rejectionMetrics returns (wickSize, bodyClose, penetrationDepth).
 // Returns (0,0,0) if no wick past the level.
 func rejectionMetrics(c models.Kline, side string, clusterPrice float64) (wick, body, depth float64) {
 	if side == "long" {
@@ -153,7 +243,6 @@ func rejectionMetrics(c models.Kline, side string, clusterPrice float64) (wick, 
 	return
 }
 
-// averageCandleRange returns the mean (high-low) range of a set of candles.
 func averageCandleRange(candles []models.Kline) float64 {
 	if len(candles) == 0 {
 		return 0
@@ -165,25 +254,47 @@ func averageCandleRange(candles []models.Kline) float64 {
 	return sum / float64(len(candles))
 }
 
+// trendPressure returns a score penalty if the last 3 candles show strong
+// directional momentum against the expected rejection direction.
+// A long cluster expects price to bounce UP — if candles are trending down with
+// expanding range, the rejection is fighting the trend.
+func trendPressure(candles []models.Kline, side string) int {
+	if len(candles) < 3 {
+		return 0
+	}
+	last := candles[len(candles)-3:]
+	badCandles := 0
+	prevRange := last[0].High - last[0].Low
+	for i := 1; i < len(last); i++ {
+		r := last[i].High - last[i].Low
+		isBearish := last[i].Close < last[i].Open
+		isBullish := last[i].Close > last[i].Open
+		expanding := r >= prevRange*0.9
+		if side == "long" && isBearish && expanding {
+			badCandles++
+		} else if side == "short" && isBullish && expanding {
+			badCandles++
+		}
+		prevRange = r
+	}
+	if badCandles >= 2 {
+		return -20 // strong trend against us — downgrade
+	}
+	return 0
+}
+
 // ── Signal scoring (0–100) ────────────────────────────────────────────────────
 
-// scoreRejection grades the quality of a confirmed rejection candle.
-//
-// Components:
-//   - Reclaim strength  (0–40): how much of the wick was reclaimed
-//   - Penetration depth (0–20): deep sweeps sweep more liquidity → stronger
-//   - Bias alignment    (0–20): cluster direction matches market regime
-//   - Candle momentum   (0–20): candle is meaningfully sized vs recent average
 func scoreRejection(wick, body, depth, clusterPrice float64, side string, regime models.MarketRegime, candleRange, avgRange float64) int {
 	score := 0
 
-	// Reclaim strength — capped at 40
+	// Reclaim strength (0–40)
 	if wick > 0 {
 		reclaimRatio := body / wick
 		score += int(math.Min(reclaimRatio*50, 40))
 	}
 
-	// Penetration depth — expressed as % of cluster price
+	// Penetration depth (0–20)
 	depthPct := depth / clusterPrice * 100
 	if depthPct >= 0.3 {
 		score += 20
@@ -191,15 +302,12 @@ func scoreRejection(wick, body, depth, clusterPrice float64, side string, regime
 		score += 10
 	}
 
-	// Bias alignment — long cluster swept in liquidation/distribution (bearish context)
-	// short cluster swept in trending/accumulation (bullish context)
-	if side == "long" && (regime == models.RegimeLiquidation || regime == models.RegimeDistribution) {
-		score += 20
-	} else if side == "short" && (regime == models.RegimeTrending || regime == models.RegimeAccumulation) {
+	// Bias alignment (0–20)
+	if isBiasAligned(side, regime) {
 		score += 20
 	}
 
-	// Candle momentum
+	// Candle momentum (0–20)
 	if avgRange > 0 && candleRange >= avgRange*0.8 {
 		score += 20
 	} else if avgRange > 0 && candleRange >= avgRange*0.5 {
@@ -209,39 +317,57 @@ func scoreRejection(wick, body, depth, clusterPrice float64, side string, regime
 	return score
 }
 
+// isBiasAligned returns true when the cluster's sweep direction matches
+// the broader market regime.
+func isBiasAligned(side string, regime models.MarketRegime) bool {
+	if side == "long" {
+		return regime == models.RegimeLiquidation || regime == models.RegimeDistribution
+	}
+	return regime == models.RegimeTrending || regime == models.RegimeAccumulation
+}
+
 // ── Alert formatters ──────────────────────────────────────────────────────────
 
-func buildFormingAlert(symbol string, m *models.LiquidationMagnet, regime models.MarketRegime) string {
+func buildFormingAlert(symbol string, m *models.LiquidationMagnet, sigs models.MarketSignals) string {
 	sweepDir := "downward"
 	if m.Side == "short" {
 		sweepDir = "upward"
 	}
+	alignLabel := "⚠️ counter-trend"
+	if isBiasAligned(m.Side, sigs.Regime) {
+		alignLabel = "✅ aligned with market flow"
+	}
 	return fmt.Sprintf(
-		"⚡ <b>%s Rejection Forming</b>\n\n%s bias | %s cluster at %s (%s)\n\nWick past level — watch for candle close\nProximity: %.2f%% from level",
+		"⚡ <b>%s Rejection Forming</b>\n\n%s bias | %s cluster at %s (%s)\nBias: %s\n\nWick past level — watch for candle close\nProximity: %.2f%% from level",
 		symbol,
-		string(regime),
+		string(sigs.Regime),
 		m.Side,
 		formatPriceStr(m.Price),
 		sweepDir,
+		alignLabel,
 		m.Distance,
 	)
 }
 
-func buildConfirmedAlert(symbol string, m *models.LiquidationMagnet, regime models.MarketRegime, score int) string {
+func buildConfirmedAlert(symbol string, m *models.LiquidationMagnet, sigs models.MarketSignals, score int, aligned bool) string {
 	sweepDir := "downward"
 	if m.Side == "short" {
 		sweepDir = "upward"
 	}
-	strengthLabel := strengthLabel(score)
+	alignLabel := "⚠️ counter-trend — trade with caution"
+	if aligned {
+		alignLabel = "✅ aligned with market flow"
+	}
 	return fmt.Sprintf(
-		"✅ <b>%s Confirmed Rejection</b>\n\n%s bias intact | %s cluster at %s (%s)\n\n5m candle closed — playbook active\n\nSetup strength: %d%% (%s)",
+		"✅ <b>%s Confirmed Rejection</b>\n\n%s bias | %s cluster at %s (%s)\n\n5m candle closed — playbook active\n\nSetup strength: %d%% (%s)\nBias: %s",
 		symbol,
-		string(regime),
+		string(sigs.Regime),
 		m.Side,
 		formatPriceStr(m.Price),
 		sweepDir,
 		score,
-		strengthLabel,
+		strengthLabel(score),
+		alignLabel,
 	)
 }
 
@@ -254,4 +380,11 @@ func strengthLabel(score int) string {
 	default:
 		return "Weak — wait for more confirmation"
 	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

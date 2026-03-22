@@ -58,6 +58,7 @@ type Worker struct {
 	lastAlertTime    time.Time
 	lastAlertMu      sync.Mutex
 	playbookCooldown *playbookCooldowns
+	followThrough    *followThroughTracker
 }
 
 func New(
@@ -75,6 +76,7 @@ func New(
 		db:               db,
 		calc:             calc,
 		playbookCooldown: newPlaybookCooldowns(),
+		followThrough:    newFollowThroughTracker(),
 	}
 }
 
