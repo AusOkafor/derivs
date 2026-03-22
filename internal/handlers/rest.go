@@ -1500,13 +1500,40 @@ type severityStats struct {
 	Effective1h int     `json:"effective_pct_1h"` // % where |outcome_1h| >= 1%
 }
 
+// setupStats holds aggregated outcome data for a single signal type.
+// HasData is false when count < minSetupSamples — callers should show "—" instead of the metrics.
+type setupStats struct {
+	Count     int     `json:"count"`
+	WinRate1h int     `json:"win_rate_1h"`   // % where |outcome_1h| >= 1%
+	AvgAbs1h  float64 `json:"avg_abs_1h"`    // mean absolute 1h move
+	HasData   bool    `json:"has_data"`
+}
+
+const minSetupSamples = 10
+
 type alertPerformanceResponse struct {
-	Period      string        `json:"period"`
-	PeriodStart time.Time     `json:"period_start"`
-	TotalAlerts int           `json:"total_alerts"`
-	High        severityStats `json:"high"`
-	Medium      severityStats `json:"medium"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	Period      string                `json:"period"`
+	PeriodStart time.Time             `json:"period_start"`
+	TotalAlerts int                   `json:"total_alerts"`
+	High        severityStats         `json:"high"`
+	Medium      severityStats         `json:"medium"`
+	SetupStats  map[string]setupStats `json:"setup_stats"`
+	UpdatedAt   time.Time             `json:"updated_at"`
+}
+
+// setupTypeFromMessage classifies an alert message into a setup type key.
+func setupTypeFromMessage(msg string) string {
+	m := strings.ToLower(msg)
+	switch {
+	case strings.Contains(m, "funding rate"):
+		return "funding_spike"
+	case strings.Contains(m, "oi up") || strings.Contains(m, "oi down") || strings.Contains(m, "open interest"):
+		return "oi_divergence"
+	case strings.Contains(m, "liquidation"):
+		return "liquidation_cluster"
+	default:
+		return ""
+	}
 }
 
 // v2Launch is when the improved alert engine was deployed.
@@ -1593,6 +1620,47 @@ func (h *Handler) AlertPerformance(w http.ResponseWriter, r *http.Request) {
 		total += b.count
 	}
 
+	// ── Setup-type aggregation ────────────────────────────────────────────────
+	type setupBucket struct {
+		count     int
+		sum1h     float64
+		effective int
+	}
+	setupBuckets := map[string]*setupBucket{}
+	for _, e := range entries {
+		key := setupTypeFromMessage(e.Message)
+		if key == "" {
+			continue
+		}
+		if setupBuckets[key] == nil {
+			setupBuckets[key] = &setupBucket{}
+		}
+		sb := setupBuckets[key]
+		sb.count++
+		if e.OutcomePct1h != nil {
+			sb.sum1h += math.Abs(*e.OutcomePct1h)
+			if math.Abs(*e.OutcomePct1h) >= 1.0 {
+				sb.effective++
+			}
+		}
+	}
+	allSetups := []string{"funding_spike", "oi_divergence", "liquidation_cluster"}
+	setupStatsMap := make(map[string]setupStats, len(allSetups))
+	for _, key := range allSetups {
+		sb := setupBuckets[key]
+		if sb == nil || sb.count == 0 {
+			setupStatsMap[key] = setupStats{}
+			continue
+		}
+		hasData := sb.count >= minSetupSamples
+		setupStatsMap[key] = setupStats{
+			Count:     sb.count,
+			WinRate1h: int(float64(sb.effective) / float64(sb.count) * 100),
+			AvgAbs1h:  math.Round(sb.sum1h/float64(sb.count)*100) / 100,
+			HasData:   hasData,
+		}
+	}
+
 	periodLabel := "30d"
 	if since.Equal(v2Launch) {
 		periodLabel = "since " + v2Launch.Format("Jan 2, 2006")
@@ -1603,6 +1671,7 @@ func (h *Handler) AlertPerformance(w http.ResponseWriter, r *http.Request) {
 		TotalAlerts: total,
 		High:        toStats("high"),
 		Medium:      toStats("medium"),
+		SetupStats:  setupStatsMap,
 		UpdatedAt:   time.Now().UTC(),
 	}
 

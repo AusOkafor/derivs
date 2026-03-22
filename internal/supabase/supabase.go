@@ -458,6 +458,7 @@ func (c *Client) GetRecentAlertLogs(ctx context.Context, subscriberID string, si
 // AlertOutcomeEntry holds the minimal fields needed for performance aggregation.
 type AlertOutcomeEntry struct {
 	Severity      string   `json:"severity"`
+	Message       string   `json:"message"`
 	OutcomePct15m *float64 `json:"outcome_pct_15m"`
 	OutcomePct1h  *float64 `json:"outcome_pct_1h"`
 }
@@ -467,7 +468,7 @@ type AlertOutcomeEntry struct {
 func (c *Client) GetAlertOutcomes(ctx context.Context, since time.Time) ([]AlertOutcomeEntry, error) {
 	sinceStr := since.Format(time.RFC3339)
 	u := fmt.Sprintf(
-		"%s/rest/v1/alert_history?outcome_pct_1h=not.is.null&triggered_at=gte.%s&select=severity,outcome_pct_15m,outcome_pct_1h&limit=2000&order=triggered_at.desc",
+		"%s/rest/v1/alert_history?outcome_pct_1h=not.is.null&triggered_at=gte.%s&select=severity,message,outcome_pct_15m,outcome_pct_1h&limit=2000&order=triggered_at.desc",
 		c.baseURL, url.QueryEscape(sinceStr),
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
