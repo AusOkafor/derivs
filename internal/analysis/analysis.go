@@ -119,7 +119,7 @@ SENTENCE 1: Name the key price level and the setup. If a liquidation magnet exis
 Format: "[Symbol] approaching $[price] — [one-line setup description]. Sweep probability: [N]%%." OR combine naturally.
 
 SENTENCE 2: One qualitative observation about positioning or momentum and a watch condition.
-Format: "[Qualitative signal] — watch for [if/then condition]."
+Format: "[Qualitative signal] — watch [whether/for] [condition]." Never write "watch for if" — use "watch whether" or "if X, watch for Y".
 
 HARD RULES:
 - The ONLY numbers permitted are: the price level from the magnet, and the sweep probability. Everything else must be qualitative:
