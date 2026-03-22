@@ -112,47 +112,47 @@ func (w *Worker) generateAndSendPost(ctx context.Context) {
 func minClusterUSD(symbol string) float64 {
 	switch symbol {
 	// Tier 1 — mega caps: need large clusters to move price meaningfully
-	case "BTCUSDT":
+	case "BTC":
 		return 1_000_000 // $1M
-	case "ETHUSDT":
+	case "ETH":
 		return 750_000 // $750K
-	case "BNBUSDT":
+	case "BNB":
 		return 500_000 // $500K
-	case "XRPUSDT":
+	case "XRP":
 		return 400_000 // $400K
 
-	// Tier 2 — large caps: $300K+
-	case "SOLUSDT":
-		return 300_000
-	case "DOGEUSDT":
-		return 300_000
-	case "AVAXUSDT":
-		return 250_000
-	case "LINKUSDT":
-		return 250_000
-	case "TONUSDT":
-		return 250_000
-
-	// Tier 3 — mid caps: $150K+
-	case "ARBUSDT":
+	// Tier 2 — large caps: $200K+
+	case "SOL":
+		return 200_000
+	case "DOGE":
+		return 100_000
+	case "AVAX":
 		return 150_000
-	case "OPUSDT":
+	case "LINK":
 		return 150_000
-	case "INJUSDT":
-		return 150_000
-	case "SUIUSDT":
+	case "TON":
 		return 150_000
 
-	// Tier 4 — smaller / newer: $100K+
-	case "WLDUSDT":
+	// Tier 3 — mid caps: $100K+
+	case "ARB":
 		return 100_000
-	case "TIAUSDT":
+	case "OP":
 		return 100_000
-	case "PENDLEUSDT":
+	case "INJ":
 		return 100_000
+	case "SUI":
+		return 100_000
+
+	// Tier 4 — smaller / newer: $75K+
+	case "WLD":
+		return 75_000
+	case "TIA":
+		return 75_000
+	case "PENDLE":
+		return 75_000
 
 	default:
-		return 150_000
+		return 100_000
 	}
 }
 
