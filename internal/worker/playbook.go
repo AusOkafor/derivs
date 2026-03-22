@@ -62,31 +62,41 @@ func (c *playbookCooldowns) allow(symbol string, level float64, stage string, ne
 
 // ── Follow-through tracker ────────────────────────────────────────────────────
 
-// followThroughEntry tracks a confirmed signal through two time windows.
+// followThroughEntry tracks a confirmed signal through three time checkpoints.
 //
-//	Stage 1 (10–20 min): did price move ≥ adaptive threshold in the right direction?
-//	                     records time-to-move if yes.
-//	Stage 2 (25–40 min): did it hold? (price still on right side of entry)
+// Checkpoints: 10 min (fast move?), 20 min (initial hold?), 40 min (held or reversed?)
 //
-// Outcome classification:
+// On every cycle, MFE and MAE are updated:
 //
-//	clean win  — moved ≥ threshold AND held
-//	weak win   — moved ≥ threshold BUT reversed
-//	failure    — never moved ≥ threshold
+//	MFE (max favorable excursion) — how far price went in the right direction
+//	MAE (max adverse excursion)   — how much heat the position took
+//
+// Outcome classification (logged at 40 min):
+//
+//	clean win  — reached threshold AND held at 40m
+//	weak win   — reached threshold BUT reversed by 40m
+//	failure    — never reached threshold
 type followThroughEntry struct {
 	symbol    string
 	side      string  // "long" or "short" cluster
-	firePrice float64 // mark price when confirmed signal fired
+	firePrice float64 // price when confirmed signal fired
 	fireTime  time.Time
-	threshold float64 // adaptive % move required (e.g. 0.075)
+	threshold float64 // adaptive % threshold (avgRangePct * 0.25)
+	score     int     // signal score — for future calibration bucketing
+	session   string  // time-of-day session at fire time
 
-	// Stage 1
-	stage1Done  bool
-	movedAt     *time.Time // when price first crossed threshold
-	initialPct  float64    // actual % move at stage 1 check
+	// Running extremes — updated every cycle
+	mfe float64 // max favorable excursion %
+	mae float64 // max adverse excursion %
 
-	// Stage 2
-	stage2Done bool
+	// Checkpoint flags
+	check10Done bool
+	check20Done bool
+	check40Done bool
+
+	// First-cross tracking
+	movedAt    *time.Time
+	initialPct float64 // % move at 10m checkpoint
 }
 
 type followThroughTracker struct {
@@ -98,7 +108,8 @@ func newFollowThroughTracker() *followThroughTracker {
 	return &followThroughTracker{}
 }
 
-func (ft *followThroughTracker) record(symbol, side string, firePrice, avgRangePct float64) {
+// record starts tracking a new confirmed signal.
+func (ft *followThroughTracker) record(symbol, side string, firePrice, avgRangePct float64, score int) {
 	threshold := math.Max(playbookFTMinPct, math.Min(playbookFTMaxPct, avgRangePct*playbookFTMultiplier))
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
@@ -108,12 +119,12 @@ func (ft *followThroughTracker) record(symbol, side string, firePrice, avgRangeP
 		firePrice: firePrice,
 		fireTime:  time.Now(),
 		threshold: threshold,
+		score:     score,
+		session:   marketSession(time.Now().UTC()),
 	})
 }
 
-// evaluate runs each cycle against current snapshot prices.
-// Stage 1: 10–20 min after fire — check initial move + time-to-move.
-// Stage 2: 25–40 min after fire — check if it held.
+// evaluate runs each cycle — updates MFE/MAE and fires checkpoint logs.
 func (ft *followThroughTracker) evaluate(snapshots map[string]symbolAlerts) {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
@@ -123,10 +134,8 @@ func (ft *followThroughTracker) evaluate(snapshots map[string]symbolAlerts) {
 
 	for _, e := range ft.pending {
 		age := now.Sub(e.fireTime)
-
-		// Drop expired entries
-		if age > 45*time.Minute {
-			continue
+		if age > 50*time.Minute {
+			continue // expired — drop
 		}
 
 		sa, ok := snapshots[e.symbol]
@@ -141,52 +150,100 @@ func (ft *followThroughTracker) evaluate(snapshots map[string]symbolAlerts) {
 		}
 
 		pctMove := (currentPrice - e.firePrice) / e.firePrice * 100
-		movedInRightDirection := (e.side == "long" && pctMove >= e.threshold) ||
-			(e.side == "short" && pctMove <= -e.threshold)
 
-		// Stage 1: 10–20 min window
-		if !e.stage1Done && age >= 10*time.Minute && age <= 20*time.Minute {
-			e.stage1Done = true
-			e.initialPct = pctMove
-			if movedInRightDirection {
-				t := now
-				e.movedAt = &t
-				timeToMove := now.Sub(e.fireTime)
-				log.Printf("[playbook:ft] ✅ %s %s — initial move %.3f%% (threshold %.3f%%) | time-to-move: %s",
-					e.symbol, e.side, math.Abs(pctMove), e.threshold, timeToMove.Round(time.Second))
-			} else {
-				log.Printf("[playbook:ft] ⚠️ %s %s — no move yet (%.3f%% vs threshold %.3f%%)",
-					e.symbol, e.side, pctMove, e.threshold)
+		// Update MFE / MAE every cycle
+		if e.side == "long" {
+			if pctMove > e.mfe {
+				e.mfe = pctMove
+			}
+			if -pctMove > e.mae {
+				e.mae = -pctMove
+			}
+		} else {
+			if -pctMove > e.mfe {
+				e.mfe = -pctMove
+			}
+			if pctMove > e.mae {
+				e.mae = pctMove
 			}
 		}
 
-		// Stage 2: 25–40 min window (only meaningful if stage 1 passed)
-		if !e.stage2Done && age >= 25*time.Minute && age <= 40*time.Minute {
-			e.stage2Done = true
-			if e.movedAt == nil {
-				// Never moved — failure
-				log.Printf("[playbook:ft] ❌ %s %s — failure: never reached threshold (final %.3f%%)",
-					e.symbol, e.side, pctMove)
-			} else {
-				// Did it reverse? Check if price returned within 50% of the threshold move.
-				holdThreshold := e.threshold * 0.5
-				reversed := (e.side == "long" && pctMove < holdThreshold) ||
-					(e.side == "short" && pctMove > -holdThreshold)
-				if reversed {
-					log.Printf("[playbook:ft] ⚠️ %s %s — weak win: moved then reversed (init %.3f%% → now %.3f%%)",
-						e.symbol, e.side, e.initialPct, pctMove)
-				} else {
-					log.Printf("[playbook:ft] ✅ %s %s — clean win: held (init %.3f%% → now %.3f%%)",
-						e.symbol, e.side, e.initialPct, pctMove)
-				}
-			}
-			continue // done — drop from pending
+		// Track first threshold cross (time-to-move)
+		movedFavorably := (e.side == "long" && pctMove >= e.threshold) ||
+			(e.side == "short" && pctMove <= -e.threshold)
+		if e.movedAt == nil && movedFavorably {
+			t := now
+			e.movedAt = &t
+			timeToMove := now.Sub(e.fireTime)
+			log.Printf("[playbook:ft] %s %s — threshold crossed %.3f%% | time-to-move: %s | score-bucket: %s | session: %s",
+				e.symbol, e.side, math.Abs(pctMove), timeToMove.Round(time.Second), scoreBucket(e.score), e.session)
+		}
+
+		// Checkpoint: 10 min — fast move check
+		if !e.check10Done && age >= 10*time.Minute {
+			e.check10Done = true
+			e.initialPct = pctMove
+			log.Printf("[playbook:ft] 10m %s %s — move: %+.3f%% | MFE: %.3f%% MAE: %.3f%%",
+				e.symbol, e.side, pctMove, e.mfe, e.mae)
+		}
+
+		// Checkpoint: 20 min — initial hold check
+		if !e.check20Done && age >= 20*time.Minute {
+			e.check20Done = true
+			log.Printf("[playbook:ft] 20m %s %s — move: %+.3f%% | MFE: %.3f%% MAE: %.3f%%",
+				e.symbol, e.side, pctMove, e.mfe, e.mae)
+		}
+
+		// Checkpoint: 40 min — final outcome
+		if !e.check40Done && age >= 40*time.Minute {
+			e.check40Done = true
+			outcome := classifyOutcome(e, pctMove)
+			log.Printf("[playbook:ft] OUTCOME %s %s — %s | score: %d (%s) | MFE: %.3f%% MAE: %.3f%% | session: %s | threshold: %.3f%%",
+				e.symbol, e.side, outcome, e.score, scoreBucket(e.score), e.mfe, e.mae, e.session, e.threshold)
+			continue // done — drop
 		}
 
 		remaining = append(remaining, e)
 	}
 
 	ft.pending = remaining
+}
+
+func classifyOutcome(e *followThroughEntry, finalPct float64) string {
+	if e.movedAt == nil {
+		return "❌ FAILURE (never reached threshold)"
+	}
+	holdThreshold := e.threshold * 0.5
+	reversed := (e.side == "long" && finalPct < holdThreshold) ||
+		(e.side == "short" && finalPct > -holdThreshold)
+	if reversed {
+		return fmt.Sprintf("⚠️ WEAK WIN (init %+.3f%% → final %+.3f%%)", e.initialPct, finalPct)
+	}
+	return fmt.Sprintf("✅ CLEAN WIN (init %+.3f%% → final %+.3f%%)", e.initialPct, finalPct)
+}
+
+// scoreBucket groups score into 10-point buckets for calibration grouping.
+func scoreBucket(score int) string {
+	low := (score / 10) * 10
+	return fmt.Sprintf("%d-%d", low, low+10)
+}
+
+// marketSession returns a label for the UTC hour at signal fire time.
+// Used to discover time-of-day patterns in outcome data.
+func marketSession(t time.Time) string {
+	h := t.Hour()
+	switch {
+	case h >= 0 && h < 8:
+		return "Asia"
+	case h >= 8 && h < 12:
+		return "London Open"
+	case h >= 12 && h < 17:
+		return "NY Session"
+	case h >= 17 && h < 21:
+		return "Late NY"
+	default:
+		return "Pre-Asia"
+	}
 }
 
 // ── Main trigger checker ──────────────────────────────────────────────────────
@@ -266,7 +323,7 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 				if err := w.notifier.SendToAdmin(msg); err != nil {
 					log.Printf("[playbook] SendToAdmin confirmed(%s): %v", symbol, err)
 				}
-				w.followThrough.record(symbol, m.Side, currentPrice, avgRangePct)
+				w.followThrough.record(symbol, m.Side, currentPrice, avgRangePct, score)
 			}
 			break
 		}
