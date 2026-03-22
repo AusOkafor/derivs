@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"derivs-backend/internal/cards"
-	"derivs-backend/internal/config"
 	"derivs-backend/internal/models"
-	"derivs-backend/internal/signals"
 )
 
 // schedulePoster wires up 3 daily post generations: 8am, 2pm, 8pm UTC.
@@ -31,30 +29,21 @@ func (w *Worker) TriggerPost(ctx context.Context) {
 	w.generateAndSendPost(ctx)
 }
 
-// generateAndSendPost fetches a fresh snapshot for every symbol right now,
-// picks the strongest signal, formats a tweet-ready post, and sends it to
-// the admin via Telegram with the generated card image.
-//
-// It does NOT use lastSnapshots — stale cache was the root cause of posts
-// showing wrong cluster types and directions vs the live dashboard.
+// generateAndSendPost scans all cached snapshots, picks the strongest signal,
+// formats a tweet-ready post, and sends it to the admin via Telegram.
 func (w *Worker) generateAndSendPost(ctx context.Context) {
-	engine := signals.New()
-	snapshots := make(map[string]symbolAlerts, len(config.DefaultSymbols))
-
-	for _, sym := range config.DefaultSymbols {
-		snap, err := w.aggregator.FetchSnapshot(ctx, sym)
-		if err != nil {
-			log.Printf("poster: FetchSnapshot(%s): %v", sym, err)
-			continue
-		}
-		sigs := engine.Analyze(snap, 0)
-		snapshots[sym] = symbolAlerts{snap: snap, sigs: sigs}
+	w.lastSnapMu.Lock()
+	snapshots := make(map[string]symbolAlerts, len(w.lastSnapshots))
+	for k, v := range w.lastSnapshots {
+		snapshots[k] = v
 	}
+	w.lastSnapMu.Unlock()
 
 	if len(snapshots) == 0 {
-		log.Println("poster: no snapshots available, skipping")
+		log.Println("poster: no snapshots available — worker cache empty, skipping")
 		return
 	}
+	log.Printf("poster: scanning %d symbols from cache", len(snapshots))
 
 	best, bestScore := "", 0
 	for symbol, sa := range snapshots {
@@ -71,6 +60,12 @@ func (w *Worker) generateAndSendPost(ctx context.Context) {
 	}
 
 	sa := snapshots[best]
+	log.Printf("poster: best signal = %s (score %d)", best, bestScore)
+	if m := sa.sigs.LiquidationMagnet; m != nil {
+		log.Printf("poster: %s magnet = %s cluster at %.2f, size=%.0f, prob=%d%%", best, m.Side, m.Price, m.SizeUSD, m.Probability)
+	} else {
+		log.Printf("poster: %s has no liquidation magnet", best)
+	}
 
 	// Enforce per-symbol minimum cluster size — small clusters on large caps aren't tweet-worthy.
 	if sa.sigs.LiquidationMagnet != nil {
