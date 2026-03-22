@@ -44,19 +44,20 @@ type symbolAlerts struct {
 // Worker runs a background ticker that fetches market data, detects anomalies,
 // and dispatches Telegram notifications to active subscribers.
 type Worker struct {
-	aggregator    *aggregator.Aggregator
-	detector      *alerts.Detector
-	alertEngine   *alerts.Engine
-	notifier      *notify.TelegramNotifier
-	db            *supabase.Client
-	calc          *feargreed.Calculator
-	running       atomic.Bool
-	freeRunning   atomic.Bool
-	proRunning    atomic.Bool
-	lastSnapshots map[string]symbolAlerts
-	lastSnapMu    sync.Mutex
-	lastAlertTime time.Time
-	lastAlertMu   sync.Mutex
+	aggregator       *aggregator.Aggregator
+	detector         *alerts.Detector
+	alertEngine      *alerts.Engine
+	notifier         *notify.TelegramNotifier
+	db               *supabase.Client
+	calc             *feargreed.Calculator
+	running          atomic.Bool
+	freeRunning      atomic.Bool
+	proRunning       atomic.Bool
+	lastSnapshots    map[string]symbolAlerts
+	lastSnapMu       sync.Mutex
+	lastAlertTime    time.Time
+	lastAlertMu      sync.Mutex
+	playbookCooldown *playbookCooldowns
 }
 
 func New(
@@ -67,12 +68,13 @@ func New(
 	calc *feargreed.Calculator,
 ) *Worker {
 	return &Worker{
-		aggregator:   agg,
-		detector:    det,
-		alertEngine: alerts.NewEngine(),
-		notifier:    not,
-		db:          db,
-		calc:        calc,
+		aggregator:       agg,
+		detector:         det,
+		alertEngine:      alerts.NewEngine(),
+		notifier:         not,
+		db:               db,
+		calc:             calc,
+		playbookCooldown: newPlaybookCooldowns(),
 	}
 }
 
@@ -204,6 +206,17 @@ func (w *Worker) runCyclePro(ctx context.Context) {
 	log.Println("worker: pro cycle starting")
 	n := w.runCycle(ctx, true) // proCycle
 	log.Printf("worker: pro cycle found %d pro subscribers", n)
+
+	// Check for rejection candles forming at cluster levels (playbook triggers).
+	w.lastSnapMu.Lock()
+	snapshots := make(map[string]symbolAlerts, len(w.lastSnapshots))
+	for k, v := range w.lastSnapshots {
+		snapshots[k] = v
+	}
+	w.lastSnapMu.Unlock()
+	if len(snapshots) > 0 {
+		go w.checkPlaybookTriggers(ctx, snapshots)
+	}
 }
 
 // runCycle executes one full notification cycle.

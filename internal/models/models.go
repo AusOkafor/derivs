@@ -48,6 +48,16 @@ type LongShortRatio struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// Kline holds one OHLCV candle from Binance futures.
+type Kline struct {
+	OpenTime int64
+	Open     float64
+	High     float64
+	Low      float64
+	Close    float64
+	Volume   float64
+}
+
 // RecentLiquidations holds real-time liquidation data from Binance WebSocket.
 type RecentLiquidations struct {
 	TotalLongUSD  float64 `json:"total_long_usd"`

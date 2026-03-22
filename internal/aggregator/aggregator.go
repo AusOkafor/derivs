@@ -480,6 +480,49 @@ func (a *Aggregator) FetchOIHistory(ctx context.Context, symbol string, limit in
 	return candles, nil
 }
 
+// FetchKlines returns the last `limit` candles for symbol at the given interval
+// (e.g. "5m", "15m") from Binance futures. Oldest candle is at index 0.
+func (a *Aggregator) FetchKlines(ctx context.Context, symbol, interval string, limit int) ([]models.Kline, error) {
+	u := fmt.Sprintf(
+		"https://fapi.binance.com/fapi/v1/klines?symbol=%s&interval=%s&limit=%d",
+		perpSymbol(symbol), interval, limit,
+	)
+
+	var raw [][]interface{}
+	if err := a.publicGet(ctx, u, &raw); err != nil {
+		a.recordError("binance", err)
+		return nil, fmt.Errorf("FetchKlines(%s %s): %w", symbol, interval, err)
+	}
+	a.recordSuccess("binance")
+
+	candles := make([]models.Kline, 0, len(raw))
+	for _, row := range raw {
+		if len(row) < 6 {
+			continue
+		}
+		parseF := func(v interface{}) float64 {
+			switch s := v.(type) {
+			case string:
+				f, _ := strconv.ParseFloat(s, 64)
+				return f
+			case float64:
+				return s
+			}
+			return 0
+		}
+		openTime, _ := row[0].(float64)
+		candles = append(candles, models.Kline{
+			OpenTime: int64(openTime),
+			Open:     parseF(row[1]),
+			High:     parseF(row[2]),
+			Low:      parseF(row[3]),
+			Close:    parseF(row[4]),
+			Volume:   parseF(row[5]),
+		})
+	}
+	return candles, nil
+}
+
 // FetchFundingHistory returns the last `limit` hourly funding rate points for
 // a symbol, oldest-first. Bybit returns newest-first so we reverse the list.
 func (a *Aggregator) FetchFundingHistory(ctx context.Context, symbol string, limit int) ([]models.FundingRatePoint, error) {
