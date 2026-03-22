@@ -67,6 +67,11 @@ func (w *Worker) generateAndSendPost(ctx context.Context) {
 			log.Printf("poster: %s cluster too small (%.0f < %.0f), skipping", best, sa.sigs.LiquidationMagnet.SizeUSD, minCluster)
 			return
 		}
+		// Hard floor on sweep probability — low probability setups produce misleading posts.
+		if sa.sigs.LiquidationMagnet.Probability < 50 {
+			log.Printf("poster: %s sweep probability too low (%d%% < 50%%), skipping", best, sa.sigs.LiquidationMagnet.Probability)
+			return
+		}
 	}
 
 	post := formatPost(sa.snap, sa.sigs)
@@ -211,6 +216,12 @@ func formatPost(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 		priceStr := formatPrice(m.Price)
 		sideLabel := strings.ToLower(m.Side)
 
+		// Direction: a long cluster gets swept downward; a short cluster gets swept upward.
+		sweepDir := "downward"
+		if sideLabel == "short" {
+			sweepDir = "upward"
+		}
+
 		// Series header
 		sb.WriteString("DerivLens — Liquidity Watch\n\n")
 
@@ -220,13 +231,13 @@ func formatPost(snap models.MarketSnapshot, sigs models.MarketSignals) string {
 
 		// Line 2: context block
 		sb.WriteString("Context:\n")
-		sb.WriteString(fmt.Sprintf("• %.0f%% longs (crowded)\n• Funding: %s%.4f%%\n\n",
-			avgLong, fundingSign, fundingPct))
+		sb.WriteString(fmt.Sprintf("• %.2f%% from the level\n• %.0f%% longs\n• Funding: %s%.4f%%\n\n",
+			m.Distance, avgLong, fundingSign, fundingPct))
 
-		// Line 3: model read
-		sb.WriteString("Model favors a sweep first.\n\n")
+		// Line 3: model read — explicit direction + probability
+		sb.WriteString(fmt.Sprintf("Model favors a %s sweep first. Sweep probability: %d%%.\n\n", sweepDir, m.Probability))
 
-		// Line 4: plan — anchor price in plan
+		// Line 4: plan
 		sb.WriteString(fmt.Sprintf("Plan:\nWatch reaction at %s\nSweep → reversal or continuation\n\n", priceStr))
 		sb.WriteString("No confirmation = no trade.\n\n")
 	} else {
