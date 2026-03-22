@@ -122,7 +122,10 @@ SENTENCE 2: One qualitative observation about positioning or momentum and a watc
 Format: "[Qualitative signal] — watch for [if/then condition]."
 
 HARD RULES:
-- The ONLY numbers permitted are: the price level from the magnet, and the sweep probability. Cluster size (e.g. "$236k", "$1.2M") is NOT permitted — describe size qualitatively ("large cluster", "thin cluster") if needed. No other percentages, ratios, or scores.
+- The ONLY numbers permitted are: the price level from the magnet, and the sweep probability. Everything else must be qualitative:
+  - Cluster size → "large cluster" / "thin cluster" (never "$236k" or "$1.2M")
+  - Stop hunt probability → "long side more at risk" / "shorts more exposed" (never "70% probability")
+  - Squeeze probability, gravity pull, cascade score, OI change → qualitative words only
 - Use all other data (exchange divergence, funding, OI, long/short ratios) to form qualitative words only — never quote those numbers.
 - No "will" — use "watch for", "likely", "if/then".
 - No outcome predictions ("violent", "explosive", "aggressive").
