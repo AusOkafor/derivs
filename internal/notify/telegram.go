@@ -416,6 +416,16 @@ func (t *TelegramNotifier) SendToAdmin(message string) error {
 	return t.SendMessage(context.Background(), id, message)
 }
 
+// SendPhotoToAdmin sends a photo with caption to the admin's personal Telegram chat.
+// Used by the poster to deliver the card image alongside the suggested X post text.
+func (t *TelegramNotifier) SendPhotoToAdmin(imgBytes []byte, caption string) error {
+	adminChatID := os.Getenv("ADMIN_TELEGRAM_CHAT_ID")
+	if adminChatID == "" {
+		return nil
+	}
+	return t.SendPhoto(adminChatID, imgBytes, caption)
+}
+
 // VerifyAuth validates Telegram Login Widget auth data using HMAC-SHA256.
 // See https://core.telegram.org/widgets/login#checking-authorization
 func (t *TelegramNotifier) VerifyAuth(data map[string]string) bool {

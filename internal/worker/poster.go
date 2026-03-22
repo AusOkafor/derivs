@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"time"
 
+	"derivs-backend/internal/cards"
 	"derivs-backend/internal/models"
 )
 
@@ -69,12 +71,26 @@ func (w *Worker) generateAndSendPost(ctx context.Context) {
 
 	post := formatPost(sa.snap, sa.sigs)
 
-	msg := fmt.Sprintf("📢 <b>SUGGESTED X POST</b>\n\n<code>%s</code>", post)
-	if err := w.notifier.SendToAdmin(msg); err != nil {
-		log.Printf("poster: failed to send post to admin: %v", err)
-		return
+	// Generate a visual card to attach to the X post.
+	cardData := buildPostCardData(sa.snap, sa.sigs)
+	imgBytes, cardErr := cards.GenerateAlertCard(cardData)
+	if cardErr == nil {
+		// Send image + post text as caption so admin can attach both to the tweet.
+		caption := fmt.Sprintf("📢 SUGGESTED X POST\n\n%s", post)
+		if err := w.notifier.SendPhotoToAdmin(imgBytes, caption); err != nil {
+			log.Printf("poster: failed to send card to admin: %v, falling back to text", err)
+			cardErr = err
+		}
 	}
-	log.Printf("poster: sent suggested post for %s (score: %d)", best, bestScore)
+	if cardErr != nil {
+		// Fall back to text-only if card generation or delivery failed.
+		msg := fmt.Sprintf("📢 <b>SUGGESTED X POST</b>\n\n<code>%s</code>", post)
+		if err := w.notifier.SendToAdmin(msg); err != nil {
+			log.Printf("poster: failed to send post to admin: %v", err)
+			return
+		}
+	}
+	log.Printf("poster: sent suggested post for %s (score: %d, card: %v)", best, bestScore, cardErr == nil)
 }
 
 // minClusterUSD returns the minimum liquidation cluster size required before posting for a symbol.
@@ -252,5 +268,44 @@ func formatClusterSize(v float64) string {
 		return fmt.Sprintf("$%.1fM", v/1_000_000)
 	}
 	return fmt.Sprintf("$%.0fK", v/1_000)
+}
+
+// buildPostCardData constructs AlertCardData for the poster card from live snapshot + signals.
+func buildPostCardData(snap models.MarketSnapshot, sigs models.MarketSignals) cards.AlertCardData {
+	clusterPrice := 0.0
+	clusterSize := 0.0
+	distance := 0.0
+	sweepProb := 0
+	sev := "MEDIUM"
+
+	if sigs.LiquidationMagnet != nil {
+		m := sigs.LiquidationMagnet
+		clusterPrice = m.Price
+		clusterSize = m.SizeUSD
+		distance = m.Distance / 100
+		sweepProb = m.Probability
+		if m.Probability >= 70 {
+			sev = "HIGH"
+		}
+	}
+
+	gravityPct := math.Max(sigs.LiquidityGravity.UpwardPull, sigs.LiquidityGravity.DownwardPull)
+
+	return cards.AlertCardData{
+		Symbol:       snap.Symbol,
+		Severity:     sev,
+		AlertType:    "Liquidity Watch",
+		Price:        snap.LiquidationMap.CurrentPrice,
+		ClusterPrice: clusterPrice,
+		ClusterSize:  clusterSize,
+		Distance:     distance,
+		SweepProb:    sweepProb,
+		CascadeLevel: sigs.CascadeRisk.Level,
+		CascadeScore: sigs.CascadeRisk.Score,
+		GravityDir:   sigs.LiquidityGravity.Dominant,
+		GravityPct:   gravityPct,
+		Funding:      snap.FundingRate.Rate,
+		OIChange:     snap.OpenInterest.OIChange1h,
+	}
 }
 
