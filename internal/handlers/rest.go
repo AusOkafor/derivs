@@ -1313,7 +1313,9 @@ func (h *Handler) TriggerPost(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
 	}
-	go h.worker.TriggerPost(r.Context())
+	// Use context.Background() — r.Context() cancels as soon as the response
+	// is sent, which would kill the 16 FetchSnapshot calls mid-flight.
+	go h.worker.TriggerPost(context.Background())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "post generation triggered"})
 }
 
