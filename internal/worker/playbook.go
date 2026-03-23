@@ -91,8 +91,12 @@ func newPlaybookCooldowns() *playbookCooldowns {
 
 // allow returns true if the signal may fire. Within the cooldown window, a new
 // signal is only allowed if it scores at least playbookScoreOverride points higher.
+//
+// Key is symbol:stage only — NOT symbol:level:stage — because the cluster price
+// shifts slightly each cycle as the liquidation map is recalculated, which would
+// otherwise bypass the cooldown and spam on every cycle.
 func (c *playbookCooldowns) allow(symbol string, level float64, stage string, newScore int) bool {
-	key := fmt.Sprintf("%s:%.2f:%s", symbol, level, stage)
+	key := fmt.Sprintf("%s:%s", symbol, stage)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -106,10 +110,10 @@ func (c *playbookCooldowns) allow(symbol string, level float64, stage string, ne
 	return true
 }
 
-// blockForming sets the forming cooldown for a symbol/level so it cannot fire
-// after a confirmed signal has already been dispatched for that level.
+// blockForming sets the forming cooldown for a symbol so it cannot fire
+// after a confirmed signal has already been dispatched for that symbol.
 func (c *playbookCooldowns) blockForming(symbol string, level float64) {
-	key := fmt.Sprintf("%s:%.2f:forming", symbol, level)
+	key := fmt.Sprintf("%s:forming", symbol)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[key] = cooldownEntry{firedAt: time.Now(), score: 999}
