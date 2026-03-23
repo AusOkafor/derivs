@@ -661,56 +661,60 @@ func isBiasAligned(side string, regime models.MarketRegime) bool {
 // ── Alert formatters ──────────────────────────────────────────────────────────
 
 func buildFormingAlert(symbol string, m *models.LiquidationMagnet, sigs models.MarketSignals) string {
-	sweepDir := "downward"
+	sweepArrow := "↓"
 	if m.Side == "short" {
-		sweepDir = "upward"
+		sweepArrow = "↑"
 	}
-	alignLabel := "⚠️ counter-trend"
-	if isBiasAligned(m.Side, sigs.Regime) {
-		alignLabel = "✅ aligned with market flow"
+	aligned := isBiasAligned(m.Side, sigs.Regime)
+	biasLabel := "⚠️ Counter-trend"
+	actionLine := "→ Wait for 5m close + extra confirmation before acting"
+	if aligned {
+		biasLabel = "✅ Aligned"
+		actionLine = "→ Watch for 5m close — reaction holds = valid setup"
 	}
 	return fmt.Sprintf(
-		"⚡ <b>%s Rejection Forming</b>\n\n%s bias | %s cluster at %s (%s)\nBias: %s\n\nWick past level — watch for candle close\nProximity: %.2f%% from level",
+		"⚡ <b>%s — Rejection Forming</b>\n\nLevel: %s (%s cluster %s)\nBias: %s\n\nWick below level\nWatching for 5m close\n\n%s",
 		symbol,
-		string(sigs.Regime),
-		m.Side,
 		formatPriceStr(m.Price),
-		sweepDir,
-		alignLabel,
-		m.Distance,
+		m.Side,
+		sweepArrow,
+		biasLabel,
+		actionLine,
 	)
 }
 
 func buildConfirmedAlert(symbol string, m *models.LiquidationMagnet, sigs models.MarketSignals, score int, aligned bool) string {
-	sweepDir := "downward"
+	sweepArrow := "↓"
 	if m.Side == "short" {
-		sweepDir = "upward"
+		sweepArrow = "↑"
 	}
-	alignLabel := "⚠️ counter-trend — trade with caution"
+	biasLabel := "⚠️ Counter-trend"
+	actionLine := "→ Counter-trend: wait for extra confirmation"
 	if aligned {
-		alignLabel = "✅ aligned with market flow"
+		biasLabel = "✅ Aligned"
+		actionLine = "→ Watch for continuation if reaction holds"
 	}
 	return fmt.Sprintf(
-		"✅ <b>%s Confirmed Rejection</b>\n\n%s bias | %s cluster at %s (%s)\n\n5m candle closed — playbook active\n\nSetup strength: %d%% (%s)\nBias: %s",
+		"✅ <b>%s — Rejection Confirmed</b>\n\nLevel: %s (%s cluster %s)\nStrength: %d%% (%s)\nBias: %s\n\nPlaybook active\n\n%s",
 		symbol,
-		string(sigs.Regime),
-		m.Side,
 		formatPriceStr(m.Price),
-		sweepDir,
+		m.Side,
+		sweepArrow,
 		score,
 		strengthLabel(score),
-		alignLabel,
+		biasLabel,
+		actionLine,
 	)
 }
 
 func strengthLabel(score int) string {
 	switch {
 	case score >= 75:
-		return "Strong rejection"
+		return "Strong"
 	case score >= 50:
-		return "Moderate rejection"
+		return "Moderate"
 	default:
-		return "Weak — wait for more confirmation"
+		return "Weak"
 	}
 }
 
