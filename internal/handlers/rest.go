@@ -1455,7 +1455,7 @@ func (h *Handler) DiscordWebhook(w http.ResponseWriter, r *http.Request) {
 				masked = hookURL
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"webhook_url": masked, "set": fmt.Sprintf("%v", hookURL != "")})
+		writeJSON(w, http.StatusOK, map[string]any{"webhook_url": masked, "set": hookURL != ""})
 
 	case http.MethodPost:
 		var body struct {
