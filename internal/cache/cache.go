@@ -9,6 +9,7 @@ import (
 	"derivs-backend/internal/models"
 )
 
+
 type entry struct {
 	data      models.SnapshotWithAnalysis
 	expiresAt time.Time
