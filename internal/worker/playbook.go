@@ -106,6 +106,15 @@ func (c *playbookCooldowns) allow(symbol string, level float64, stage string, ne
 	return true
 }
 
+// blockForming sets the forming cooldown for a symbol/level so it cannot fire
+// after a confirmed signal has already been dispatched for that level.
+func (c *playbookCooldowns) blockForming(symbol string, level float64) {
+	key := fmt.Sprintf("%s:%.2f:forming", symbol, level)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[key] = cooldownEntry{firedAt: time.Now(), score: 999}
+}
+
 // ── Follow-through tracker ────────────────────────────────────────────────────
 
 // followThroughEntry tracks a confirmed signal through three time checkpoints.
@@ -385,6 +394,8 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 					SweepDir: sweepDirStr(m.Side), Regime: string(sa.sigs.Regime),
 				},
 			}
+			// Block forming for this level — confirmed supersedes it on all future cycles
+			w.playbookCooldown.blockForming(symbol, m.Price)
 			log.Printf("[playbook] %s confirmed candidate score=%d trend_penalty=%d avg_range_pct=%.3f%%",
 				symbol, score, trendPenalty, avgRangePct)
 			break
