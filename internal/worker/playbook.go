@@ -19,6 +19,8 @@ const (
 	playbookScoreOverride = 15  // allow re-alert if new score exceeds previous by this much
 	playbookKlineInterval = "5m"
 	playbookKlineLimit    = 6 // 5 closed + 1 open (current)
+	playbookMinAlertScore = 60 // confirmed alerts below this score are suppressed
+	playbookMaxPerCycle   = 3  // max alerts sent in one worker cycle across all symbols
 
 	// Follow-through: adaptive threshold = avgRangePct * this multiplier.
 	// E.g. if avg 5m range = 0.3% of price, threshold = 0.3 * 0.25 = 0.075%.
@@ -292,8 +294,24 @@ func marketSession(t time.Time) string {
 
 // ── Main trigger checker ──────────────────────────────────────────────────────
 
+// playbookCandidate holds a ready-to-send alert collected during one cycle.
+type playbookCandidate struct {
+	symbol      string
+	stage       string // "forming" or "confirmed"
+	score       int
+	msg         string
+	state       PlaybookState
+	currentPrice float64
+	avgRangePct  float64
+	side        string
+}
+
 func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string]symbolAlerts) {
 	w.followThrough.evaluate(snapshots)
+
+	// ── Pass 1: collect all candidates ───────────────────────────────────────
+	// One entry per symbol — confirmed takes priority over forming.
+	candidates := make(map[string]*playbookCandidate) // keyed by symbol
 
 	for symbol, sa := range snapshots {
 		m := sa.sigs.LiquidationMagnet
@@ -318,39 +336,14 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 		avgRange := averageCandleRange(closedCandles)
 		currentPrice := sa.snap.LiquidationMap.CurrentPrice
 
-		// avgRangePct: average 5m range as % of price — used for adaptive threshold
 		avgRangePct := 0.0
 		if currentPrice > 0 {
 			avgRangePct = avgRange / currentPrice * 100
 		}
 
-		// ── Stage 1: Forming ─────────────────────────────────────────────────
-		if wickPastLevel(currentCandle, m.Side, m.Price) {
-			candleRange := currentCandle.High - currentCandle.Low
-			if avgRange == 0 || candleRange >= avgRange*playbookMinMomentum {
-				if w.playbookCooldown.allow(symbol, m.Price, "forming", 0) {
-					msg := buildFormingAlert(symbol, m, sa.sigs)
-					log.Printf("[playbook] %s forming at %.4f (prob=%d%%)", symbol, m.Price, m.Probability)
-					if err := w.notifier.SendToAdmin(msg); err != nil {
-						log.Printf("[playbook] SendToAdmin forming(%s): %v", symbol, err)
-					}
-					w.playbookStates.set(symbol, PlaybookState{
-						Symbol:       symbol,
-						Stage:        "forming",
-						Score:        0,
-						FiredAt:      time.Now(),
-						ClusterPrice: m.Price,
-						Side:         m.Side,
-						Probability:  m.Probability,
-						Aligned:      isBiasAligned(m.Side, sa.sigs.Regime),
-						SweepDir:     sweepDirStr(m.Side),
-						Regime:       string(sa.sigs.Regime),
-					})
-				}
-			}
-		}
+		aligned := isBiasAligned(m.Side, sa.sigs.Regime)
 
-		// ── Stage 2: Confirmed ───────────────────────────────────────────────
+		// ── Check confirmed first (higher priority) ───────────────────────
 		for i := len(closedCandles) - 1; i >= 0; i-- {
 			c := closedCandles[i]
 			wick, body, depth := rejectionMetrics(c, m.Side, m.Price)
@@ -360,42 +353,116 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			if body < wick*playbookDisplacementR {
 				continue
 			}
-
 			candleRange := c.High - c.Low
 			if avgRange > 0 && candleRange < avgRange*playbookMinMomentum {
 				log.Printf("[playbook] %s closed candle too small, skipping", symbol)
 				break
 			}
-
 			trendPenalty := trendPressure(closedCandles, m.Side)
 			score := scoreRejection(wick, body, depth, m.Price, m.Side, sa.sigs.Regime, candleRange, avgRange)
 			score = max(0, score+trendPenalty)
 
-			aligned := isBiasAligned(m.Side, sa.sigs.Regime)
-			if w.playbookCooldown.allow(symbol, m.Price, "confirmed", score) {
-				msg := buildConfirmedAlert(symbol, m, sa.sigs, score, aligned)
-				log.Printf("[playbook] %s confirmed at %.4f score=%d aligned=%v trend_penalty=%d avg_range_pct=%.3f%%",
-					symbol, m.Price, score, aligned, trendPenalty, avgRangePct)
-				if err := w.notifier.SendToAdmin(msg); err != nil {
-					log.Printf("[playbook] SendToAdmin confirmed(%s): %v", symbol, err)
-				}
-				w.followThrough.record(symbol, m.Side, currentPrice, avgRangePct, score)
-				w.playbookStates.set(symbol, PlaybookState{
-					Symbol:       symbol,
-					Stage:        "confirmed",
-					Score:        score,
-					FiredAt:      time.Now(),
-					ClusterPrice: m.Price,
-					Side:         m.Side,
-					Probability:  m.Probability,
-					Aligned:      aligned,
-					SweepDir:     sweepDirStr(m.Side),
-					Regime:       string(sa.sigs.Regime),
-				})
+			if score < playbookMinAlertScore {
+				log.Printf("[playbook] %s confirmed score %d below min %d — suppressed", symbol, score, playbookMinAlertScore)
+				break
 			}
+			if !w.playbookCooldown.allow(symbol, m.Price, "confirmed", score) {
+				break
+			}
+
+			candidates[symbol] = &playbookCandidate{
+				symbol:       symbol,
+				stage:        "confirmed",
+				score:        score,
+				msg:          buildConfirmedAlert(symbol, m, sa.sigs, score, aligned),
+				currentPrice: currentPrice,
+				avgRangePct:  avgRangePct,
+				side:         m.Side,
+				state: PlaybookState{
+					Symbol: symbol, Stage: "confirmed", Score: score,
+					FiredAt: time.Now(), ClusterPrice: m.Price, Side: m.Side,
+					Probability: m.Probability, Aligned: aligned,
+					SweepDir: sweepDirStr(m.Side), Regime: string(sa.sigs.Regime),
+				},
+			}
+			log.Printf("[playbook] %s confirmed candidate score=%d trend_penalty=%d avg_range_pct=%.3f%%",
+				symbol, score, trendPenalty, avgRangePct)
 			break
 		}
+
+		// ── Check forming — only if no confirmed candidate for this symbol ─
+		if _, hasConfirmed := candidates[symbol]; !hasConfirmed {
+			if wickPastLevel(currentCandle, m.Side, m.Price) {
+				candleRange := currentCandle.High - currentCandle.Low
+				if avgRange == 0 || candleRange >= avgRange*playbookMinMomentum {
+					if w.playbookCooldown.allow(symbol, m.Price, "forming", 0) {
+						candidates[symbol] = &playbookCandidate{
+							symbol: symbol,
+							stage:  "forming",
+							score:  0,
+							msg:    buildFormingAlert(symbol, m, sa.sigs),
+							state: PlaybookState{
+								Symbol: symbol, Stage: "forming", Score: 0,
+								FiredAt: time.Now(), ClusterPrice: m.Price, Side: m.Side,
+								Probability: m.Probability, Aligned: aligned,
+								SweepDir: sweepDirStr(m.Side), Regime: string(sa.sigs.Regime),
+							},
+						}
+						log.Printf("[playbook] %s forming candidate at %.4f (prob=%d%%)", symbol, m.Price, m.Probability)
+					}
+				}
+			}
+		}
 	}
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	// ── Pass 2: sort — confirmed before forming, then by score desc ──────────
+	sorted := make([]*playbookCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		sorted = append(sorted, c)
+	}
+	// Simple insertion sort (small slice)
+	for i := 1; i < len(sorted); i++ {
+		for j := i; j > 0; j-- {
+			a, b := sorted[j-1], sorted[j]
+			aRank := candidateRank(a)
+			bRank := candidateRank(b)
+			if bRank > aRank {
+				sorted[j-1], sorted[j] = sorted[j], sorted[j-1]
+			} else {
+				break
+			}
+		}
+	}
+
+	// ── Pass 3: send up to playbookMaxPerCycle ────────────────────────────────
+	sent := 0
+	for _, c := range sorted {
+		if sent >= playbookMaxPerCycle {
+			log.Printf("[playbook] cycle cap reached (%d) — suppressing %s %s", playbookMaxPerCycle, c.symbol, c.stage)
+			break
+		}
+		if err := w.notifier.SendToAdmin(c.msg); err != nil {
+			log.Printf("[playbook] SendToAdmin %s %s: %v", c.symbol, c.stage, err)
+		}
+		w.playbookStates.set(c.symbol, c.state)
+		if c.stage == "confirmed" {
+			w.followThrough.record(c.symbol, c.side, c.currentPrice, c.avgRangePct, c.score)
+		}
+		sent++
+	}
+}
+
+// candidateRank returns a sort key — higher = more important.
+// confirmed outranks forming; within same stage, higher score wins.
+func candidateRank(c *playbookCandidate) int {
+	if c.stage == "confirmed" {
+		return 1000 + c.score
+	}
+	return c.score
 }
 
 // ── Candle analysis helpers ───────────────────────────────────────────────────
