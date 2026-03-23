@@ -456,7 +456,12 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 		}
 	}
 
-	// ── Pass 3: send up to playbookMaxPerCycle ────────────────────────────────
+	// ── Pass 3: send — candidates are sorted highest-priority first ─────────
+	// Each subscriber receives at most one playbook alert per cycle (the
+	// highest-ranked candidate whose symbol matches their subscription).
+	// This prevents flooding users who have many symbols configured.
+	subReceived := make(map[int64]bool) // chatID → already received this cycle
+
 	sent := 0
 	for _, c := range sorted {
 		if sent >= playbookMaxPerCycle {
@@ -469,7 +474,8 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			log.Printf("[playbook] SendToAdmin %s %s: %v", c.symbol, c.stage, err)
 		}
 
-		// Deliver to every Basic/Pro subscriber who has this symbol enabled
+		// Deliver to Basic/Pro subscribers who have this symbol enabled
+		// and have not already received a playbook alert this cycle.
 		subsSent := 0
 		for _, sub := range subs {
 			tier := sub.Tier
@@ -479,12 +485,16 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			if tier == "free" || sub.ChatID == 0 {
 				continue
 			}
+			if subReceived[sub.ChatID] {
+				continue // already got the highest-priority alert this cycle
+			}
 			for _, sym := range allowedSymbols(sub) {
 				if sym == c.symbol {
 					if err := w.notifier.SendMessage(ctx, sub.ChatID, c.msg); err != nil {
 						log.Printf("[playbook] SendMessage(chat=%d) %s %s: %v", sub.ChatID, c.symbol, c.stage, err)
 					} else {
 						subsSent++
+						subReceived[sub.ChatID] = true
 					}
 					break
 				}
