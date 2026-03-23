@@ -430,6 +430,13 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 		return
 	}
 
+	// Fetch subscribers once — used in Pass 3 to deliver alerts to users
+	subs, err := w.db.GetActiveSubscribers(ctx)
+	if err != nil {
+		log.Printf("[playbook] GetActiveSubscribers: %v", err)
+		subs = nil
+	}
+
 	// ── Pass 2: sort — confirmed before forming, then by score desc ──────────
 	sorted := make([]*playbookCandidate, 0, len(candidates))
 	for _, c := range candidates {
@@ -456,9 +463,35 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			log.Printf("[playbook] cycle cap reached (%d) — suppressing %s %s", playbookMaxPerCycle, c.symbol, c.stage)
 			break
 		}
+
+		// Admin monitoring
 		if err := w.notifier.SendToAdmin(c.msg); err != nil {
 			log.Printf("[playbook] SendToAdmin %s %s: %v", c.symbol, c.stage, err)
 		}
+
+		// Deliver to every Basic/Pro subscriber who has this symbol enabled
+		subsSent := 0
+		for _, sub := range subs {
+			tier := sub.Tier
+			if tier == "" {
+				tier = "free"
+			}
+			if tier == "free" || sub.ChatID == 0 {
+				continue
+			}
+			for _, sym := range allowedSymbols(sub) {
+				if sym == c.symbol {
+					if err := w.notifier.SendMessage(ctx, sub.ChatID, c.msg); err != nil {
+						log.Printf("[playbook] SendMessage(chat=%d) %s %s: %v", sub.ChatID, c.symbol, c.stage, err)
+					} else {
+						subsSent++
+					}
+					break
+				}
+			}
+		}
+		log.Printf("[playbook] %s %s dispatched to %d subscribers", c.symbol, c.stage, subsSent)
+
 		w.playbookStates.set(c.symbol, c.state)
 		if c.stage == "confirmed" {
 			w.followThrough.record(c.symbol, c.side, c.currentPrice, c.avgRangePct, c.score)
