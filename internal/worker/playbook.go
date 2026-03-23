@@ -672,13 +672,18 @@ func buildFormingAlert(symbol string, m *models.LiquidationMagnet, sigs models.M
 		biasLabel = "✅ Aligned"
 		actionLine = "→ Watch for 5m close — reaction holds = valid setup"
 	}
+	wickDir := "below"
+	if m.Side == "short" {
+		wickDir = "above"
+	}
 	return fmt.Sprintf(
-		"⚡ <b>%s — Rejection Forming</b>\n\nLevel: %s (%s cluster %s)\nBias: %s\n\nWick below level\nWatching for 5m close\n\n%s",
+		"⚡ <b>%s — Rejection Forming</b>\n\nLevel: %s (%s cluster %s)\nBias: %s\n\nWick %s level\nWatching for 5m close\n\n%s",
 		symbol,
 		formatPriceStr(m.Price),
 		m.Side,
 		sweepArrow,
 		biasLabel,
+		wickDir,
 		actionLine,
 	)
 }
