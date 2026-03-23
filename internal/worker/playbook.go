@@ -22,6 +22,12 @@ const (
 	playbookMinAlertScore = 60 // confirmed alerts below this score are suppressed
 	playbookMaxPerCycle   = 3  // max alerts sent in one worker cycle across all symbols
 
+	// Minimum cluster size per symbol — mirrors frontend defaults.
+	// Clusters below these thresholds are too small to be meaningful.
+	playbookMinClusterBTC     = 500_000 // $500K
+	playbookMinClusterETH     = 200_000 // $200K
+	playbookMinClusterDefault = 100_000 // $100K for all other symbols
+
 	// Follow-through: adaptive threshold = avgRangePct * this multiplier.
 	// E.g. if avg 5m range = 0.3% of price, threshold = 0.3 * 0.25 = 0.075%.
 	playbookFTMultiplier = 0.25
@@ -332,6 +338,10 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			continue
 		}
 		if m.Distance >= playbookProximityPct {
+			continue
+		}
+		if m.SizeUSD < playbookMinClusterSize(symbol) {
+			log.Printf("[playbook] %s cluster $%.0f below minimum $%.0f — skipped", symbol, m.SizeUSD, playbookMinClusterSize(symbol))
 			continue
 		}
 
@@ -709,6 +719,19 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// playbookMinClusterSize returns the minimum cluster size in USD for a symbol.
+// Mirrors the frontend defaults in clusterSizeOptionsForSymbol.
+func playbookMinClusterSize(symbol string) float64 {
+	switch symbol {
+	case "BTC":
+		return playbookMinClusterBTC
+	case "ETH":
+		return playbookMinClusterETH
+	default:
+		return playbookMinClusterDefault
+	}
 }
 
 // sweepDirStr returns the expected sweep direction for a given cluster side.
