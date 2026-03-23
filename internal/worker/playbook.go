@@ -27,6 +27,50 @@ const (
 	playbookFTMaxPct     = 0.30 // ceiling: never above 0.30%
 )
 
+// ── Live state store ─────────────────────────────────────────────────────────
+
+// PlaybookState holds the most recent trigger state for a symbol.
+// Exposed via GET /api/playbook/status so the frontend can show live context.
+type PlaybookState struct {
+	Symbol       string    `json:"symbol"`
+	Stage        string    `json:"stage"`        // "forming", "confirmed", "idle"
+	Score        int       `json:"score"`
+	FiredAt      time.Time `json:"fired_at"`
+	ClusterPrice float64   `json:"cluster_price"`
+	Side         string    `json:"side"`
+	Probability  int       `json:"probability"`
+	Aligned      bool      `json:"aligned"`
+	SweepDir     string    `json:"sweep_dir"`
+	Regime       string    `json:"regime"`
+}
+
+type playbookStateStore struct {
+	mu     sync.Mutex
+	states map[string]PlaybookState
+}
+
+func newPlaybookStateStore() *playbookStateStore {
+	return &playbookStateStore{states: make(map[string]PlaybookState)}
+}
+
+func (s *playbookStateStore) set(symbol string, state PlaybookState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.states[symbol] = state
+}
+
+// Get returns the current state for a symbol, falling back to "idle" if
+// the state has expired (older than the cooldown window).
+func (s *playbookStateStore) get(symbol string) PlaybookState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.states[symbol]
+	if !ok || time.Since(st.FiredAt) > playbookCooldown {
+		return PlaybookState{Symbol: symbol, Stage: "idle"}
+	}
+	return st
+}
+
 // ── Cooldown with score memory ────────────────────────────────────────────────
 
 type cooldownEntry struct {
@@ -290,6 +334,18 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 					if err := w.notifier.SendToAdmin(msg); err != nil {
 						log.Printf("[playbook] SendToAdmin forming(%s): %v", symbol, err)
 					}
+					w.playbookStates.set(symbol, PlaybookState{
+						Symbol:       symbol,
+						Stage:        "forming",
+						Score:        0,
+						FiredAt:      time.Now(),
+						ClusterPrice: m.Price,
+						Side:         m.Side,
+						Probability:  m.Probability,
+						Aligned:      isBiasAligned(m.Side, sa.sigs.Regime),
+						SweepDir:     sweepDirStr(m.Side),
+						Regime:       string(sa.sigs.Regime),
+					})
 				}
 			}
 		}
@@ -324,6 +380,18 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 					log.Printf("[playbook] SendToAdmin confirmed(%s): %v", symbol, err)
 				}
 				w.followThrough.record(symbol, m.Side, currentPrice, avgRangePct, score)
+				w.playbookStates.set(symbol, PlaybookState{
+					Symbol:       symbol,
+					Stage:        "confirmed",
+					Score:        score,
+					FiredAt:      time.Now(),
+					ClusterPrice: m.Price,
+					Side:         m.Side,
+					Probability:  m.Probability,
+					Aligned:      aligned,
+					SweepDir:     sweepDirStr(m.Side),
+					Regime:       string(sa.sigs.Regime),
+				})
 			}
 			break
 		}
@@ -516,4 +584,12 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// sweepDirStr returns the expected sweep direction for a given cluster side.
+func sweepDirStr(side string) string {
+	if side == "long" {
+		return "downward"
+	}
+	return "upward"
 }

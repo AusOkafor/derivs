@@ -59,6 +59,7 @@ type Worker struct {
 	lastAlertMu      sync.Mutex
 	playbookCooldown *playbookCooldowns
 	followThrough    *followThroughTracker
+	playbookStates   *playbookStateStore
 }
 
 func New(
@@ -77,6 +78,7 @@ func New(
 		calc:             calc,
 		playbookCooldown: newPlaybookCooldowns(),
 		followThrough:    newFollowThroughTracker(),
+		playbookStates:   newPlaybookStateStore(),
 	}
 }
 
@@ -989,6 +991,12 @@ func ruleTypeFromAlertID(alertID string) string {
 		}
 	}
 	return rest
+}
+
+// GetPlaybookState returns the most recent playbook trigger state for a symbol.
+// Returns Stage="idle" if no trigger has fired recently (within cooldown window).
+func (w *Worker) GetPlaybookState(symbol string) PlaybookState {
+	return w.playbookStates.get(symbol)
 }
 
 // alertRuleKey maps an alert message to its rule key using keyword matching.

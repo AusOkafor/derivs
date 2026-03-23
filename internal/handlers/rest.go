@@ -1830,6 +1830,24 @@ func (h *Handler) ThresholdSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ─── Playbook status ──────────────────────────────────────────────────────────
+
+// PlaybookStatus handles GET /api/playbook/status?symbol=BTC
+// Returns the most recent playbook trigger state (forming / confirmed / idle).
+func (h *Handler) PlaybookStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	if symbol == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol required"})
+		return
+	}
+	state := h.worker.GetPlaybookState(symbol)
+	writeJSON(w, http.StatusOK, state)
+}
+
 // ─── Klines proxy ─────────────────────────────────────────────────────────────
 
 // Klines proxies GET /api/klines?symbol=BTC&interval=5m&limit=100 to Binance
