@@ -23,17 +23,21 @@ type LiquidationEvent struct {
 }
 
 type RecentLiquidations struct {
-	Events    []LiquidationEvent `json:"events"`
-	TotalLong float64            `json:"total_long_usd"`  // longs liquidated
-	TotalShort float64           `json:"total_short_usd"` // shorts liquidated
-	Window    string             `json:"window"`          // "5m"
+	Events      []LiquidationEvent `json:"events"`
+	TotalLong   float64            `json:"total_long_usd"`   // longs liquidated
+	TotalShort  float64            `json:"total_short_usd"`  // shorts liquidated
+	Window      string             `json:"window"`           // "5m"
+	ConnectedAt *time.Time         `json:"connected_at,omitempty"`
+	UptimeSecs  int                `json:"uptime_secs,omitempty"`
 }
 
 type Feed struct {
-	mu      sync.RWMutex
-	events  map[string][]LiquidationEvent // symbol -> recent events
-	symbols []string
-	conn    *websocket.Conn
+	mu          sync.RWMutex
+	events      map[string][]LiquidationEvent // symbol -> recent events
+	symbols     []string
+	conn        *websocket.Conn
+	connectedAt time.Time
+	totalEvents int64
 }
 
 func NewFeed(symbols []string) *Feed {
@@ -82,7 +86,10 @@ func (f *Feed) connect(ctx context.Context) error {
 	}
 	log.Printf("[liquidations] WebSocket connected successfully")
 	defer conn.Close()
+	f.mu.Lock()
 	f.conn = conn
+	f.connectedAt = time.Now()
+	f.mu.Unlock()
 
 	for {
 		select {
@@ -153,6 +160,11 @@ func (f *Feed) handleMessage(msg []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.totalEvents++
+	if f.totalEvents <= 5 || f.totalEvents%50 == 0 {
+		log.Printf("[liquidations] event #%d: %s %s $%.0f", f.totalEvents, sym, side, sizeUSD)
+	}
+
 	events := f.events[sym]
 	events = append(events, event)
 
@@ -189,12 +201,18 @@ func (f *Feed) GetRecent(symbol string) RecentLiquidations {
 		recent = recent[len(recent)-10:]
 	}
 
-	return RecentLiquidations{
+	result := RecentLiquidations{
 		Events:     recent,
 		TotalLong:  math.Round(totalLong),
 		TotalShort: math.Round(totalShort),
 		Window:     "5m",
 	}
+	if !f.connectedAt.IsZero() {
+		t := f.connectedAt
+		result.ConnectedAt = &t
+		result.UptimeSecs = int(time.Since(f.connectedAt).Seconds())
+	}
+	return result
 }
 
 // GetBurst returns true if >$10M liquidated in last 30 seconds (cascade signal)
