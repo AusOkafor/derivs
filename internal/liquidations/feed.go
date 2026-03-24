@@ -110,11 +110,12 @@ type binanceForceOrderMsg struct {
 	Data   struct {
 		EventType string `json:"e"`
 		Order     struct {
-			Symbol    string  `json:"s"`
-			Side      string  `json:"S"` // BUY or SELL
-			Price     float64 `json:"ap,string"` // average price
-			Quantity  float64 `json:"q,string"`  // quantity
-			TradeTime int64   `json:"T"`
+			Symbol     string  `json:"s"`
+			Side       string  `json:"S"`          // BUY or SELL
+			Price      float64 `json:"ap,string"`  // average fill price (may be "0" before fill)
+			LimitPrice float64 `json:"p,string"`   // limit price — reliable fallback
+			Quantity   float64 `json:"q,string"`   // quantity
+			TradeTime  int64   `json:"T"`
 		} `json:"o"`
 	} `json:"data"`
 }
@@ -122,22 +123,42 @@ type binanceForceOrderMsg struct {
 func (f *Feed) handleMessage(msg []byte) {
 	var m binanceForceOrderMsg
 	if err := json.Unmarshal(msg, &m); err != nil {
+		log.Printf("[liquidations] parse error: %v — raw: %.200s", err, string(msg))
 		return
 	}
 
 	order := m.Data.Order
 	if order.Symbol == "" {
+		// Log first few unknown messages to catch format changes
+		f.mu.Lock()
+		f.totalEvents++
+		n := f.totalEvents
+		f.mu.Unlock()
+		if n <= 3 {
+			log.Printf("[liquidations] msg #%d has no symbol — raw: %.300s", n, string(msg))
+		}
 		return
 	}
 
 	// Convert symbol: BTCUSDT -> BTC
 	sym := symbolFromBinance(order.Symbol)
+	// ap (average price) is "0" when order just placed; fall back to limit price p
 	price := order.Price
+	if price == 0 {
+		price = order.LimitPrice
+	}
 	qty := order.Quantity
 	sizeUSD := price * qty
 
 	// Skip tiny liquidations < $1k
 	if sizeUSD < 1000 {
+		f.mu.Lock()
+		f.totalEvents++
+		n := f.totalEvents
+		f.mu.Unlock()
+		if n <= 10 {
+			log.Printf("[liquidations] dropped #%d %s: price=%.2f qty=%.4f sizeUSD=%.2f", n, sym, price, qty, sizeUSD)
+		}
 		return
 	}
 
