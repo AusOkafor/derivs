@@ -188,8 +188,12 @@ func isProTier(tier string) bool {
 	return tier == "pro"
 }
 
+// freeAlertSymbols are the symbols free-tier subscribers receive alerts for.
+// BTC is intentionally excluded — it's the primary upgrade incentive.
+var freeAlertSymbols = []string{"ETH", "SOL"}
+
 // allowedSymbols returns the symbols a subscriber is allowed to receive alerts for.
-// Free: no alerts. Basic: up to 5 symbols. Pro: all 16 symbols.
+// Free: ETH + SOL (high-severity only, enforced at delivery). Basic: up to 5 symbols. Pro: all 16.
 func allowedSymbols(sub supabase.Subscriber) []string {
 	switch sub.Tier {
 	case "pro":
@@ -199,8 +203,8 @@ func allowedSymbols(sub supabase.Subscriber) []string {
 			return sub.Symbols[:5]
 		}
 		return sub.Symbols
-	default: // free or empty — no alerts
-		return nil
+	default: // free — ETH + SOL only
+		return freeAlertSymbols
 	}
 }
 
@@ -256,21 +260,20 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 		return 0
 	}
 
-	// Filter by tier: proOnly = Pro only; !proOnly = Basic only (Free gets no alerts)
+	// Filter by tier:
+	// proOnly=true  → Pro only
+	// proOnly=false → Basic + Free (free gets ETH/SOL high-only, enforced at delivery)
 	var filtered []supabase.Subscriber
 	for _, sub := range subscribers {
 		tier := sub.Tier
 		if tier == "" {
 			tier = "free"
 		}
-		if tier == "free" {
-			continue // free users get no alerts
-		}
 		if proOnly && !isProTier(tier) {
 			continue
 		}
 		if !proOnly && isProTier(tier) {
-			continue // basic cycle: Pro excluded (handled by pro cycle)
+			continue // basic/free cycle: Pro excluded (handled by pro cycle)
 		}
 		filtered = append(filtered, sub)
 	}
@@ -370,6 +373,11 @@ func (w *Worker) runCycle(ctx context.Context, proOnly bool) int {
 			}
 			for _, alert := range sa.detected {
 				if !w.shouldSendAlert(sub.Rules, alert) {
+					continue
+				}
+				// Free tier: high-severity only — medium/low would overwhelm users
+				// who haven't paid and undermine the upgrade incentive.
+				if (sub.Tier == "" || sub.Tier == "free") && alert.Severity != "high" {
 					continue
 				}
 				candidates = append(candidates, symAlert{sym: sym, alert: alert, snap: sa.snap, sigs: sa.sigs})
