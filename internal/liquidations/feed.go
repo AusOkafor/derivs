@@ -109,6 +109,7 @@ type binanceForceOrderMsg struct {
 	Stream string `json:"stream"`
 	Data   struct {
 		EventType string `json:"e"`
+		EventTime int64  `json:"E"` // must be explicit to prevent case-insensitive collision with "e"
 		Order     struct {
 			Symbol     string  `json:"s"`
 			Side       string  `json:"S"`          // BUY or SELL
