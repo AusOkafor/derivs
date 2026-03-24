@@ -1047,6 +1047,67 @@ func (c *Client) UpdateSubscriberRules(ctx context.Context, username string, rul
 	return nil
 }
 
+// PlaybookCooldownRow mirrors the `playbook_cooldowns` table.
+type PlaybookCooldownRow struct {
+	Key     string    `json:"key"`
+	FiredAt time.Time `json:"fired_at"`
+	Score   int       `json:"score"`
+}
+
+// UpsertPlaybookCooldown saves or updates a playbook cooldown entry.
+// Uses ON CONFLICT (key) DO UPDATE so restarts restore the exact last-fired time.
+// Requires table: playbook_cooldowns (key TEXT PRIMARY KEY, fired_at TIMESTAMPTZ, score INT)
+func (c *Client) UpsertPlaybookCooldown(ctx context.Context, key string, firedAt time.Time, score int) error {
+	apiURL := c.baseURL + "/rest/v1/playbook_cooldowns"
+	body, _ := json.Marshal(PlaybookCooldownRow{Key: key, FiredAt: firedAt, Score: score})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: UpsertPlaybookCooldown build: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal,resolution=merge-duplicates")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: UpsertPlaybookCooldown: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("supabase: UpsertPlaybookCooldown: status %d: %s", resp.StatusCode, b)
+	}
+	return nil
+}
+
+// LoadPlaybookCooldowns returns all cooldown rows from the last `window` duration.
+// Called on startup to restore in-memory cooldown state after a restart.
+func (c *Client) LoadPlaybookCooldowns(ctx context.Context, window time.Duration) ([]PlaybookCooldownRow, error) {
+	since := time.Now().Add(-window).UTC().Format(time.RFC3339)
+	apiURL := fmt.Sprintf("%s/rest/v1/playbook_cooldowns?fired_at=gte.%s&select=key,fired_at,score",
+		c.baseURL, url.QueryEscape(since))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: LoadPlaybookCooldowns build: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: LoadPlaybookCooldowns: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: LoadPlaybookCooldowns: status %d", resp.StatusCode)
+	}
+	var rows []PlaybookCooldownRow
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("supabase: LoadPlaybookCooldowns decode: %w", err)
+	}
+	return rows, nil
+}
+
 // setHeaders applies the standard Supabase auth headers to every request.
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("apikey", c.serviceKey)

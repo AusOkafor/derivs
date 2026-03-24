@@ -132,6 +132,20 @@ func (w *Worker) Start(ctx context.Context) {
 	log.Println("worker: starting free cycle (5min)")
 	log.Println("worker: starting pro cycle (1min)")
 
+	// Restore playbook cooldowns from DB so a restart doesn't bypass the 30-min window.
+	if rows, err := w.db.LoadPlaybookCooldowns(ctx, playbookCooldown); err != nil {
+		log.Printf("[playbook] restore cooldowns: %v", err)
+	} else {
+		w.playbookCooldown.mu.Lock()
+		for _, row := range rows {
+			if time.Since(row.FiredAt) < playbookCooldown {
+				w.playbookCooldown.entries[row.Key] = cooldownEntry{firedAt: row.FiredAt, score: row.Score}
+			}
+		}
+		w.playbookCooldown.mu.Unlock()
+		log.Printf("[playbook] restored %d cooldowns from DB", len(rows))
+	}
+
 	scheduleDaily(time.Date(0, 1, 1, 13, 0, 0, 0, time.UTC), func() {
 		go w.SendMorningBrief(context.Background())
 	})

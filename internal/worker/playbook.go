@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -470,6 +473,14 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 		}
 	}
 
+	// Resolve admin chat ID once — used to skip double-delivery to admin who is also a subscriber.
+	adminChatID := int64(0)
+	if s := os.Getenv("ADMIN_TELEGRAM_CHAT_ID"); s != "" {
+		if id, err := strconv.ParseInt(s, 10, 64); err == nil {
+			adminChatID = id
+		}
+	}
+
 	// ── Pass 3: send — candidates are sorted highest-priority first ─────────
 	// Each subscriber receives at most one playbook alert per cycle (the
 	// highest-ranked candidate whose symbol matches their subscription).
@@ -490,6 +501,7 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 
 		// Deliver to Basic/Pro subscribers who have this symbol enabled
 		// and have not already received a playbook alert this cycle.
+		// Skip admin chat ID — already received via SendToAdmin above.
 		subsSent := 0
 		for _, sub := range subs {
 			tier := sub.Tier
@@ -498,6 +510,9 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			}
 			if tier == "free" || sub.ChatID == 0 {
 				continue
+			}
+			if sub.ChatID == adminChatID {
+				continue // admin already notified via SendToAdmin
 			}
 			if subReceived[sub.ChatID] {
 				continue // already got the highest-priority alert this cycle
@@ -515,6 +530,22 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 			}
 		}
 		log.Printf("[playbook] %s %s dispatched to %d subscribers", c.symbol, c.stage, subsSent)
+
+		// Persist cooldown to Supabase so restarts don't bypass the 30-min window.
+		firedAt := time.Now()
+		cooldownKey := fmt.Sprintf("%s:%s", c.symbol, c.stage)
+		go func(key string, score int, at time.Time) {
+			if err := w.db.UpsertPlaybookCooldown(context.Background(), key, at, score); err != nil {
+				log.Printf("[playbook] persist cooldown %s: %v", key, err)
+			}
+			// If confirmed, also persist the forming block so it can't fire during cooldown.
+			if strings.HasSuffix(key, ":confirmed") {
+				sym := strings.TrimSuffix(key, ":confirmed")
+				if err := w.db.UpsertPlaybookCooldown(context.Background(), sym+":forming", at, 999); err != nil {
+					log.Printf("[playbook] persist forming block %s: %v", sym+":forming", err)
+				}
+			}
+		}(cooldownKey, c.score, firedAt)
 
 		w.playbookStates.set(c.symbol, c.state)
 		if c.stage == "confirmed" {
