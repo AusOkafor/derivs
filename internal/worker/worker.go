@@ -60,6 +60,7 @@ type Worker struct {
 	playbookCooldown *playbookCooldowns
 	followThrough    *followThroughTracker
 	playbookStates   *playbookStateStore
+	simCapture       *simCaptureTracker
 }
 
 func New(
@@ -79,6 +80,7 @@ func New(
 		playbookCooldown: newPlaybookCooldowns(),
 		followThrough:    newFollowThroughTracker(),
 		playbookStates:   newPlaybookStateStore(),
+		simCapture:       newSimCaptureTracker(),
 	}
 }
 
@@ -155,8 +157,10 @@ func (w *Worker) Start(ctx context.Context) {
 	proTicker := time.NewTicker(1 * time.Minute)
 	topTargetTicker := time.NewTicker(30 * time.Minute)
 	outcomeTicker := time.NewTicker(5 * time.Minute)
+	simOutcomeTicker := time.NewTicker(1 * time.Hour)
 	defer topTargetTicker.Stop()
 	defer outcomeTicker.Stop()
+	defer simOutcomeTicker.Stop()
 
 	// Run both immediately on start
 	go w.runCycleFree(ctx)
@@ -174,6 +178,8 @@ func (w *Worker) Start(ctx context.Context) {
 			go w.broadcastTopTarget(ctx)
 		case <-outcomeTicker.C:
 			go w.backfillOutcomes(ctx)
+		case <-simOutcomeTicker.C:
+			go w.resolveSimulatorOutcomes(ctx)
 		case <-ctx.Done():
 			log.Println("worker: shutting down")
 			freeTicker.Stop()

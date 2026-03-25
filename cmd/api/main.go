@@ -125,6 +125,9 @@ func main() {
 	mux.HandleFunc("/api/admin/ai/resume", h.ResumeAI)
 	mux.HandleFunc("/api/admin/ai/status", h.AIStatus)
 	mux.HandleFunc("/api/admin/poster/trigger", h.TriggerPost)
+	mux.HandleFunc("/api/simulator/score", h.PostSimulatorScore)
+	mux.HandleFunc("/api/simulator/leaderboard", h.GetSimulatorLeaderboard)
+	mux.HandleFunc("/api/simulator/scenario", h.GetSimulatorScenario)
 	mux.Handle("/ws", websocket.Handler(hub.ServeWS))
 
 	log.Printf("derivlens: listening on %s", cfg.Addr())

@@ -318,14 +318,16 @@ func marketSession(t time.Time) string {
 
 // playbookCandidate holds a ready-to-send alert collected during one cycle.
 type playbookCandidate struct {
-	symbol      string
-	stage       string // "forming" or "confirmed"
-	score       int
-	msg         string
-	state       PlaybookState
+	symbol       string
+	stage        string // "forming" or "confirmed"
+	score        int
+	msg          string
+	state        PlaybookState
 	currentPrice float64
 	avgRangePct  float64
-	side        string
+	side         string
+	snap         *models.MarketSnapshot
+	sigs         *models.MarketSignals
 }
 
 func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string]symbolAlerts) {
@@ -396,6 +398,8 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 				break
 			}
 
+			snapCopy := sa.snap
+			sigsCopy := sa.sigs
 			candidates[symbol] = &playbookCandidate{
 				symbol:       symbol,
 				stage:        "confirmed",
@@ -404,6 +408,8 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 				currentPrice: currentPrice,
 				avgRangePct:  avgRangePct,
 				side:         m.Side,
+				snap:         &snapCopy,
+				sigs:         &sigsCopy,
 				state: PlaybookState{
 					Symbol: symbol, Stage: "confirmed", Score: score,
 					FiredAt: time.Now(), ClusterPrice: m.Price, Side: m.Side,
@@ -550,6 +556,7 @@ func (w *Worker) checkPlaybookTriggers(ctx context.Context, snapshots map[string
 		w.playbookStates.set(c.symbol, c.state)
 		if c.stage == "confirmed" {
 			w.followThrough.record(c.symbol, c.side, c.currentPrice, c.avgRangePct, c.score)
+			go w.captureSimulatorScenario(ctx, c, c.snap, c.sigs)
 		}
 		sent++
 	}
