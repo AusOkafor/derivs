@@ -428,11 +428,21 @@ func (t *TelegramNotifier) SendPhotoToAdmin(imgBytes []byte, caption string) err
 
 // VerifyAuth validates Telegram Login Widget auth data using HMAC-SHA256.
 // See https://core.telegram.org/widgets/login#checking-authorization
+//
+// Rejects auth data older than 24 hours to prevent replay attacks.
 func (t *TelegramNotifier) VerifyAuth(data map[string]string) bool {
 	hash, ok := data["hash"]
 	if !ok || hash == "" {
 		return false
 	}
+	// Check auth_date to reject replayed credentials older than 24 hours.
+	if authDateStr, ok := data["auth_date"]; ok {
+		authDate, err := strconv.ParseInt(authDateStr, 10, 64)
+		if err != nil || time.Since(time.Unix(authDate, 0)) > 24*time.Hour {
+			return false
+		}
+	}
+
 	delete(data, "hash")
 
 	keys := make([]string, 0, len(data))

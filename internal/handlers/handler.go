@@ -33,9 +33,10 @@ type Handler struct {
 	notifier           *notify.TelegramNotifier
 	billing            *billing.StripeClient
 	lemonSqueezy       *billing.LemonSqueezyClient
-	adminSecret        string
-	stripePriceIDBasic string
-	stripePriceIDPro   string
+	adminSecret             string
+	telegramWebhookSecret   string
+	stripePriceIDBasic      string
+	stripePriceIDPro        string
 	worker             *worker.Worker
 	liqFeed            *liquidations.Feed
 	startTime          time.Time
@@ -57,26 +58,28 @@ func New(
 	billingClient *billing.StripeClient,
 	lemonSqueezyClient *billing.LemonSqueezyClient,
 	adminSecret string,
+	telegramWebhookSecret string,
 	stripePriceIDBasic, stripePriceIDPro string,
 	wrk *worker.Worker,
 	liqFeed *liquidations.Feed,
 ) *Handler {
 	return &Handler{
-		aggregator:         agg,
-		analyzer:           az,
-		cache:              c,
-		detector:           det,
-		calc:               calc,
-		db:                 db,
-		notifier:           notifier,
-		billing:            billingClient,
-		lemonSqueezy:       lemonSqueezyClient,
-		adminSecret:        adminSecret,
-		stripePriceIDBasic: stripePriceIDBasic,
-		stripePriceIDPro:   stripePriceIDPro,
-		worker:             wrk,
-		liqFeed:            liqFeed,
-		startTime:          time.Now(),
-		aiCache:            make(map[string]aiCacheEntry),
+		aggregator:            agg,
+		analyzer:              az,
+		cache:                 c,
+		detector:              det,
+		calc:                  calc,
+		db:                    db,
+		notifier:              notifier,
+		billing:               billingClient,
+		lemonSqueezy:          lemonSqueezyClient,
+		adminSecret:           adminSecret,
+		telegramWebhookSecret: telegramWebhookSecret,
+		stripePriceIDBasic:    stripePriceIDBasic,
+		stripePriceIDPro:      stripePriceIDPro,
+		worker:                wrk,
+		liqFeed:               liqFeed,
+		startTime:             time.Now(),
+		aiCache:               make(map[string]aiCacheEntry),
 	}
 }

@@ -31,6 +31,7 @@ type Config struct {
 	LemonSqueezyVariantPro    string
 	LemonSqueezyStoreID       string
 	AdminSecret             string
+	TelegramWebhookSecret   string
 }
 
 func Load() *Config {
@@ -52,6 +53,7 @@ func Load() *Config {
 		LemonSqueezyVariantPro:      os.Getenv("LEMONSQUEEZY_VARIANT_PRO"),
 		LemonSqueezyStoreID:         os.Getenv("LEMONSQUEEZY_STORE_ID"),
 		AdminSecret:                 os.Getenv("ADMIN_SECRET"),
+		TelegramWebhookSecret:       os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
 	}
 
 	required := map[string]string{
@@ -64,6 +66,13 @@ func Load() *Config {
 		if val == "" {
 			panic(fmt.Sprintf("config: required environment variable %q is not set", key))
 		}
+	}
+
+	if cfg.AdminSecret == "" {
+		fmt.Println("config: WARNING — ADMIN_SECRET is not set; admin endpoints will return 503")
+	}
+	if cfg.TelegramWebhookSecret == "" {
+		fmt.Println("config: WARNING — TELEGRAM_WEBHOOK_SECRET is not set; Telegram webhook is unauthenticated")
 	}
 
 	return cfg
