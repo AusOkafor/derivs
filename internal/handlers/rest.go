@@ -1892,3 +1892,49 @@ func (h *Handler) Klines(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
+
+// PostSimulatorScore handles POST /api/simulator/score
+func (h *Handler) PostSimulatorScore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var row supabase.SimulatorScoreRow
+	if err := json.NewDecoder(r.Body).Decode(&row); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	row.Username = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(row.Username)), "@")
+	if row.Username == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username required"})
+		return
+	}
+	if row.DisplayName == "" {
+		row.DisplayName = "@" + row.Username
+	}
+	if err := h.db.UpsertSimulatorScore(r.Context(), row); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save score"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// GetSimulatorLeaderboard handles GET /api/simulator/leaderboard?limit=10
+func (h *Handler) GetSimulatorLeaderboard(w http.ResponseWriter, r *http.Request) {
+	limit := 10
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 50 {
+			limit = n
+		}
+	}
+	rows, err := h.db.GetSimulatorLeaderboard(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch leaderboard"})
+		return
+	}
+	if rows == nil {
+		rows = []supabase.SimulatorScoreRow{}
+	}
+	w.Header().Set("Cache-Control", "public, max-age=30")
+	writeJSON(w, http.StatusOK, rows)
+}

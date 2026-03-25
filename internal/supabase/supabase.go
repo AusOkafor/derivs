@@ -1108,6 +1108,76 @@ func (c *Client) LoadPlaybookCooldowns(ctx context.Context, window time.Duration
 	return rows, nil
 }
 
+// ─── Simulator ───────────────────────────────────────────────────────────────
+
+// SimulatorScoreRow mirrors the simulator_scores table.
+type SimulatorScoreRow struct {
+	Username     string  `json:"username"`
+	DisplayName  string  `json:"display_name"`
+	RoundsPlayed int     `json:"rounds_played"`
+	Correct      int     `json:"correct"`
+	Score        int     `json:"score"`
+	BestStreak   int     `json:"best_streak"`
+	Accuracy     float64 `json:"accuracy"`
+}
+
+// UpsertSimulatorScore inserts or updates a user's simulator score.
+func (c *Client) UpsertSimulatorScore(ctx context.Context, row SimulatorScoreRow) error {
+	accuracy := 0.0
+	if row.RoundsPlayed > 0 {
+		accuracy = float64(row.Correct) / float64(row.RoundsPlayed) * 100
+	}
+	row.Accuracy = accuracy
+
+	body, err := json.Marshal(row)
+	if err != nil {
+		return fmt.Errorf("supabase: UpsertSimulatorScore marshal: %w", err)
+	}
+	reqURL := c.baseURL + "/rest/v1/simulator_scores"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "resolution=merge-duplicates")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: UpsertSimulatorScore: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("supabase: UpsertSimulatorScore: status %d: %s", resp.StatusCode, b)
+	}
+	return nil
+}
+
+// GetSimulatorLeaderboard returns the top N scores ordered by score descending.
+func (c *Client) GetSimulatorLeaderboard(ctx context.Context, limit int) ([]SimulatorScoreRow, error) {
+	reqURL := fmt.Sprintf(
+		"%s/rest/v1/simulator_scores?select=username,display_name,rounds_played,correct,score,best_streak,accuracy&order=score.desc&limit=%d",
+		c.baseURL, limit,
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetSimulatorLeaderboard: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase: GetSimulatorLeaderboard: status %d", resp.StatusCode)
+	}
+	var rows []SimulatorScoreRow
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("supabase: GetSimulatorLeaderboard decode: %w", err)
+	}
+	return rows, nil
+}
+
 // setHeaders applies the standard Supabase auth headers to every request.
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("apikey", c.serviceKey)
