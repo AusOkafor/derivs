@@ -1948,8 +1948,8 @@ func (h *Handler) PostSimulatorScore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate score fields to prevent leaderboard spoofing
-	if row.Score < 0 || row.Score > 100 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "score must be 0–100"})
+	if row.Score < 0 || row.Score > 1_000_000 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "score out of range"})
 		return
 	}
 	if row.RoundsPlayed <= 0 || row.RoundsPlayed > 10000 {
