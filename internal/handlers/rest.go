@@ -1938,3 +1938,29 @@ func (h *Handler) GetSimulatorLeaderboard(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Cache-Control", "public, max-age=30")
 	writeJSON(w, http.StatusOK, rows)
 }
+
+// GetSimulatorScenario handles GET /api/simulator/scenario?limit=20
+// Returns recent resolved live scenarios captured from real playbook signals.
+func (h *Handler) GetSimulatorScenario(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	rows, err := h.db.GetSimulatorScenario(r.Context(), limit)
+	if err != nil {
+		log.Printf("GetSimulatorScenario: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch scenarios"})
+		return
+	}
+	if rows == nil {
+		rows = []supabase.SimulatorScenarioRow{}
+	}
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	writeJSON(w, http.StatusOK, rows)
+}

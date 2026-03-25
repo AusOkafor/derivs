@@ -1178,6 +1178,146 @@ func (c *Client) GetSimulatorLeaderboard(ctx context.Context, limit int) ([]Simu
 	return rows, nil
 }
 
+// ─── Simulator Scenarios ─────────────────────────────────────────────────────
+
+// SimulatorScenarioRow mirrors the simulator_scenarios table.
+type SimulatorScenarioRow struct {
+	ID          string    `json:"id,omitempty"`
+	Symbol      string    `json:"symbol"`
+	CapturedAt  time.Time `json:"captured_at"`
+	Price       float64   `json:"price"`
+	Funding     float64   `json:"funding"`
+	OIChange1h  float64   `json:"oi_change_1h"`
+	Regime      string    `json:"regime"`
+	OITrend     string    `json:"oi_trend"`
+	LPIScore    int       `json:"lpi_score"`
+	Bias        string    `json:"bias"`
+	ClusterSide  *string  `json:"cluster_side,omitempty"`
+	ClusterPrice *float64 `json:"cluster_price,omitempty"`
+	ClusterSize  *float64 `json:"cluster_size,omitempty"`
+	ClusterDist  *float64 `json:"cluster_dist,omitempty"`
+	Difficulty  string    `json:"difficulty"`
+	SetupType   string    `json:"setup_type"`
+	KeySignal   string    `json:"key_signal"`
+	Outcome     *string   `json:"outcome,omitempty"`
+	OutcomePrice *float64 `json:"outcome_price,omitempty"`
+	MovePct     *float64  `json:"move_pct,omitempty"`
+}
+
+// SaveSimulatorScenario inserts a new scenario snapshot.
+func (c *Client) SaveSimulatorScenario(ctx context.Context, row SimulatorScenarioRow) error {
+	body, err := json.Marshal(row)
+	if err != nil {
+		return fmt.Errorf("supabase: SaveSimulatorScenario marshal: %w", err)
+	}
+	reqURL := c.baseURL + "/rest/v1/simulator_scenarios"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: SaveSimulatorScenario: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("supabase: SaveSimulatorScenario: status %d: %s", resp.StatusCode, b)
+	}
+	return nil
+}
+
+// GetUnresolvedScenarios returns scenarios between minAge and maxAge with no outcome.
+func (c *Client) GetUnresolvedScenarios(ctx context.Context, minAge, maxAge time.Duration) ([]SimulatorScenarioRow, error) {
+	now := time.Now().UTC()
+	minTime := now.Add(-maxAge).Format(time.RFC3339)
+	maxTime := now.Add(-minAge).Format(time.RFC3339)
+	reqURL := fmt.Sprintf(
+		"%s/rest/v1/simulator_scenarios?select=*&outcome=is.null&captured_at=gte.%s&captured_at=lte.%s",
+		c.baseURL,
+		url.QueryEscape(minTime),
+		url.QueryEscape(maxTime),
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetUnresolvedScenarios: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("supabase: GetUnresolvedScenarios: status %d: %s", resp.StatusCode, b)
+	}
+	var rows []SimulatorScenarioRow
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("supabase: GetUnresolvedScenarios decode: %w", err)
+	}
+	return rows, nil
+}
+
+// ResolveSimulatorScenario sets the outcome on a captured scenario.
+func (c *Client) ResolveSimulatorScenario(ctx context.Context, id, outcome string, outcomePrice, movePct float64) error {
+	payload := map[string]interface{}{
+		"outcome":       outcome,
+		"outcome_price": outcomePrice,
+		"move_pct":      movePct,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("supabase: ResolveSimulatorScenario marshal: %w", err)
+	}
+	reqURL := fmt.Sprintf("%s/rest/v1/simulator_scenarios?id=eq.%s", c.baseURL, url.QueryEscape(id))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: ResolveSimulatorScenario: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("supabase: ResolveSimulatorScenario: status %d: %s", resp.StatusCode, b)
+	}
+	return nil
+}
+
+// GetSimulatorScenario returns recent resolved scenarios for the game.
+func (c *Client) GetSimulatorScenario(ctx context.Context, limit int) ([]SimulatorScenarioRow, error) {
+	reqURL := fmt.Sprintf(
+		"%s/rest/v1/simulator_scenarios?select=*&outcome=not.is.null&order=captured_at.desc&limit=%d",
+		c.baseURL, limit,
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supabase: GetSimulatorScenario: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("supabase: GetSimulatorScenario: status %d: %s", resp.StatusCode, b)
+	}
+	var rows []SimulatorScenarioRow
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return nil, fmt.Errorf("supabase: GetSimulatorScenario decode: %w", err)
+	}
+	return rows, nil
+}
+
 // setHeaders applies the standard Supabase auth headers to every request.
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("apikey", c.serviceKey)
