@@ -18,6 +18,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"derivs-backend/internal/analysis"
 	"derivs-backend/internal/billing"
+	"derivs-backend/internal/config"
 	"derivs-backend/internal/models"
 	"derivs-backend/internal/signals"
 	"derivs-backend/internal/snooze"
@@ -1060,6 +1061,17 @@ func (h *Handler) TelegramWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verify the X-Telegram-Bot-Api-Secret-Token header if a webhook secret is configured.
+	// Set via setWebhook API call with secret_token parameter.
+	if h.telegramWebhookSecret != "" {
+		token := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+		if token != h.telegramWebhookSecret {
+			log.Printf("telegram webhook: invalid secret token from %s", r.RemoteAddr)
+			w.WriteHeader(http.StatusOK) // always 200 to Telegram
+			return
+		}
+	}
+
 	var update telegramUpdate
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 		log.Printf("telegram webhook: decode: %v", err)
@@ -1852,6 +1864,13 @@ func (h *Handler) PlaybookStatus(w http.ResponseWriter, r *http.Request) {
 
 // Klines proxies GET /api/klines?symbol=BTC&interval=5m&limit=100 to Binance
 // server-side, avoiding CORS issues with direct browser requests.
+// allowedKlineIntervals is the set of valid Binance kline intervals.
+var allowedKlineIntervals = map[string]bool{
+	"1m": true, "3m": true, "5m": true, "15m": true, "30m": true,
+	"1h": true, "2h": true, "4h": true, "6h": true, "12h": true,
+	"1d": true, "1w": true,
+}
+
 func (h *Handler) Klines(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1862,14 +1881,29 @@ func (h *Handler) Klines(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "symbol required"})
 		return
 	}
+	// Validate symbol against the supported list to prevent arbitrary proxying
+	symbolAllowed := false
+	for _, s := range config.DefaultSymbols {
+		if symbol == s {
+			symbolAllowed = true
+			break
+		}
+	}
+	if !symbolAllowed {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported symbol"})
+		return
+	}
 	interval := r.URL.Query().Get("interval")
-	if interval == "" {
+	if !allowedKlineIntervals[interval] {
 		interval = "5m"
 	}
-	limit := r.URL.Query().Get("limit")
-	if limit == "" {
-		limit = "100"
+	limitN := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 1000 {
+			limitN = n
+		}
 	}
+	limit := strconv.Itoa(limitN)
 
 	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%sUSDT&interval=%s&limit=%s",
 		symbol, interval, limit)
@@ -1908,6 +1942,30 @@ func (h *Handler) PostSimulatorScore(w http.ResponseWriter, r *http.Request) {
 	if row.Username == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username required"})
 		return
+	}
+	if err := validateUsername(row.Username); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username"})
+		return
+	}
+	// Validate score fields to prevent leaderboard spoofing
+	if row.Score < 0 || row.Score > 100 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "score must be 0–100"})
+		return
+	}
+	if row.RoundsPlayed <= 0 || row.RoundsPlayed > 10000 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid rounds_played"})
+		return
+	}
+	if row.Correct < 0 || row.Correct > row.RoundsPlayed {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid correct count"})
+		return
+	}
+	if row.BestStreak < 0 || row.BestStreak > row.RoundsPlayed {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid best_streak"})
+		return
+	}
+	if len(row.DisplayName) > 64 {
+		row.DisplayName = row.DisplayName[:64]
 	}
 	if row.DisplayName == "" {
 		row.DisplayName = "@" + row.Username

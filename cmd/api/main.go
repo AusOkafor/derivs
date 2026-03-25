@@ -92,7 +92,7 @@ func main() {
 		)
 	}
 
-	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, lsClient, cfg.AdminSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro, wrk, liqFeed)
+	h := handlers.New(agg, az, c, detector, calc, sb, tg, billingClient, lsClient, cfg.AdminSecret, cfg.TelegramWebhookSecret, cfg.StripePriceIDBasic, cfg.StripePriceIDPro, wrk, liqFeed)
 	hub := handlers.NewHub(h)
 
 	mux := http.NewServeMux()
