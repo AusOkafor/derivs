@@ -102,7 +102,7 @@ func (c *Client) GetActiveSubscribers(ctx context.Context) ([]Subscriber, error)
 // GetSubscriberChatID returns the chat_id for a given telegram_username.
 // GET {baseURL}/rest/v1/subscribers?telegram_username=eq.{username}&select=chat_id
 func (c *Client) GetSubscriberChatID(ctx context.Context, username string) (int64, error) {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=chat_id", c.baseURL, url.QueryEscape(username))
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=ilike.%s&select=chat_id", c.baseURL, url.QueryEscape(strings.ToLower(username)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, fmt.Errorf("supabase: build request: %w", err)
@@ -217,7 +217,7 @@ func (c *Client) DeleteSubscriber(ctx context.Context, username string) error {
 
 // UpdateSubscriberTier updates tier and Stripe fields for a subscriber by telegram_username.
 func (c *Client) UpdateSubscriberTier(ctx context.Context, telegramUsername, tier, customerID, subscriptionID, status string) error {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, url.QueryEscape(telegramUsername))
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=ilike.%s", c.baseURL, url.QueryEscape(strings.ToLower(telegramUsername)))
 	body := map[string]any{"subscription_status": status}
 	if tier != "" {
 		body["tier"] = tier
@@ -323,7 +323,7 @@ func (c *Client) GetSubscriberStripeCustomerID(ctx context.Context, telegramUser
 
 // GetSubscriberTier returns the tier and status for a username.
 func (c *Client) GetSubscriberTier(ctx context.Context, telegramUsername string) (tier, status string, err error) {
-	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s&select=tier,subscription_status", c.baseURL, url.QueryEscape(telegramUsername))
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=ilike.%s&select=tier,subscription_status", c.baseURL, url.QueryEscape(strings.ToLower(telegramUsername)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("supabase: build request: %w", err)
