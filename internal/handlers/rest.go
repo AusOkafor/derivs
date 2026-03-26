@@ -559,10 +559,12 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Use username from Telegram; for manual, FirstName holds the entered username
-	telegramUsername := req.TelegramUser.Username
+	// Use username from Telegram; for manual, FirstName holds the entered username.
+	// Normalize to lowercase so all DB lookups are consistent regardless of
+	// how Telegram returns the username casing.
+	telegramUsername := strings.ToLower(strings.TrimSpace(req.TelegramUser.Username))
 	if telegramUsername == "" {
-		telegramUsername = req.TelegramUser.FirstName
+		telegramUsername = strings.ToLower(strings.TrimSpace(req.TelegramUser.FirstName))
 	}
 	if telegramUsername == "" && !isManual {
 		telegramUsername = "user_" + strconv.FormatInt(req.TelegramUser.ID, 10)
@@ -1005,7 +1007,7 @@ func (h *Handler) CreatePortal(w http.ResponseWriter, r *http.Request) {
 // GetBillingStatus handles GET /api/billing/status?username=johndoe.
 // Returns {"tier": "free"|"pro", "status": "active"|"inactive"}
 func (h *Handler) GetBillingStatus(w http.ResponseWriter, r *http.Request) {
-	username := r.URL.Query().Get("username")
+	username := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("username")))
 	if username == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
 		return
@@ -1948,8 +1950,8 @@ func (h *Handler) PostSimulatorScore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate score fields to prevent leaderboard spoofing
-	if row.Score < 0 || row.Score > 100 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "score must be 0–100"})
+	if row.Score < 0 || row.Score > 1_000_000 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "score out of range"})
 		return
 	}
 	if row.RoundsPlayed <= 0 || row.RoundsPlayed > 10000 {
