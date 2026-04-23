@@ -46,6 +46,13 @@ func validateUsername(u string) error {
 	return nil
 }
 
+func validateCheckoutEmail(e string) error {
+	if len(e) < 5 || len(e) > 254 || !strings.Contains(e, "@") {
+		return fmt.Errorf("invalid email")
+	}
+	return nil
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -509,8 +516,9 @@ type subscribeRequest struct {
 		AuthDate  int64  `json:"auth_date"`
 		Hash      string `json:"hash"`
 	} `json:"telegram_user"`
-	Symbols []string        `json:"symbols"`
-	Rules   json.RawMessage `json:"rules"`
+	Symbols       []string        `json:"symbols"`
+	Rules         json.RawMessage `json:"rules"`
+	CheckoutEmail string          `json:"checkout_email,omitempty"`
 }
 
 // Subscribe handles POST /api/subscribe.
@@ -599,6 +607,13 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		log.Printf("subscribe: CreateSubscriber: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create subscription"})
 		return
+	}
+
+	if ce := strings.TrimSpace(req.CheckoutEmail); ce != "" {
+		ph := billing.EmailToPlaceholderTelegramUsername(ce)
+		if err := h.db.MergeBillingFromPlaceholder(ctx, ph, telegramUsername); err != nil {
+			log.Printf("subscribe: MergeBillingFromPlaceholder(%s -> %s): %v", ph, telegramUsername, err)
+		}
 	}
 
 	// Notify admin of new subscriber
@@ -805,7 +820,7 @@ func (h *Handler) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 }
 
 // LemonSqueezyCheckout handles GET /api/billing/lemonsqueezy/checkout?username=johndoe&tier=basic|pro
-// Creates Lemon Squeezy checkout, returns {"checkout_url": "https://..."}
+// Username is optional — checkout can complete first; webhook links tier using buyer email → placeholder username.
 func (h *Handler) LemonSqueezyCheckout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -814,13 +829,11 @@ func (h *Handler) LemonSqueezyCheckout(w http.ResponseWriter, r *http.Request) {
 
 	username := strings.TrimPrefix(strings.TrimSpace(r.URL.Query().Get("username")), "@")
 	tier := r.URL.Query().Get("tier")
-	if username == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
-		return
-	}
-	if err := validateUsername(username); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username"})
-		return
+	if username != "" {
+		if err := validateUsername(username); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid username"})
+			return
+		}
 	}
 	if tier == "" {
 		tier = "pro"
@@ -874,9 +887,9 @@ func (h *Handler) LemonSqueezyWebhook(w http.ResponseWriter, r *http.Request) {
 		switch u.EventType {
 		case "order_created", "subscription_created":
 			if u.TelegramUsername != "" {
-				if err := h.db.UpdateSubscriberTier(ctx, u.TelegramUsername, u.Tier, u.CustomerID, u.SubscriptionID, u.Status); err != nil {
+				if err := h.db.UpsertBillingSubscriber(ctx, u.TelegramUsername, u.Tier, u.CustomerID, u.SubscriptionID, u.Status); err != nil {
 					sentry.CaptureException(err)
-					log.Printf("billing: Lemon Squeezy UpdateSubscriberTier(%s): %v", u.TelegramUsername, err)
+					log.Printf("billing: Lemon Squeezy UpsertBillingSubscriber(%s): %v", u.TelegramUsername, err)
 				}
 			}
 		case "subscription_updated":
@@ -1004,12 +1017,35 @@ func (h *Handler) CreatePortal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
-// GetBillingStatus handles GET /api/billing/status?username=johndoe.
-// Returns {"tier": "free"|"pro", "status": "active"|"inactive"}
+// GetBillingStatus handles GET /api/billing/status?username=johndoe or ?email= for post-checkout linking.
+// Returns {"tier", "status", "subscriber_username?"} — subscriber_username is set when looked up by email (internal placeholder).
 func (h *Handler) GetBillingStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	email := strings.TrimSpace(r.URL.Query().Get("email"))
+	if email != "" {
+		if err := validateCheckoutEmail(email); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid email"})
+			return
+		}
+		pseudo := billing.EmailToPlaceholderTelegramUsername(email)
+		tier, status, err := h.db.GetSubscriberTier(ctx, pseudo)
+		if err != nil {
+			sentry.CaptureException(err)
+			log.Printf("billing: GetSubscriberTier(email placeholder): %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get tier"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"tier":                 tier,
+			"status":               status,
+			"subscriber_username": pseudo,
+		})
+		return
+	}
+
 	username := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("username")))
 	if username == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username query parameter is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username or email query parameter is required"})
 		return
 	}
 	if err := validateUsername(username); err != nil {
@@ -1017,7 +1053,7 @@ func (h *Handler) GetBillingStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tier, status, err := h.db.GetSubscriberTier(r.Context(), username)
+	tier, status, err := h.db.GetSubscriberTier(ctx, username)
 	if err != nil {
 		sentry.CaptureException(err)
 		log.Printf("billing: GetSubscriberTier(%s): %v", username, err)

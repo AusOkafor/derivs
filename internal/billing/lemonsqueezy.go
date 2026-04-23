@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 )
 
 const lemonSqueezyAPI = "https://api.lemonsqueezy.com/v1"
@@ -181,12 +182,25 @@ func (c *LemonSqueezyClient) HandleWebhook(payload []byte, sigHeader string, upd
 		subID = p.Data.Relationships.Subscriptions.Data[0].ID
 	}
 
+	resolveUsername := func() string {
+		u := strings.TrimSpace(username)
+		if u != "" {
+			return u
+		}
+		email := strings.TrimSpace(p.Data.Attributes.UserEmail)
+		if email != "" {
+			return EmailToPlaceholderTelegramUsername(email)
+		}
+		return ""
+	}
+
 	switch p.Meta.EventName {
 	case "order_created":
-		if p.Data.Attributes.Status == "paid" && username != "" {
+		u := resolveUsername()
+		if p.Data.Attributes.Status == "paid" && u != "" {
 			updateFn(WebhookUpdate{
 				EventType:        "order_created",
-				TelegramUsername: username,
+				TelegramUsername: u,
 				Tier:             tier,
 				CustomerID:       p.Data.Attributes.Identifier,
 				SubscriptionID:   subID,
@@ -195,10 +209,11 @@ func (c *LemonSqueezyClient) HandleWebhook(payload []byte, sigHeader string, upd
 		}
 
 	case "subscription_created":
-		if username != "" {
+		u := resolveUsername()
+		if u != "" {
 			updateFn(WebhookUpdate{
 				EventType:        "subscription_created",
-				TelegramUsername: username,
+				TelegramUsername: u,
 				Tier:             tier,
 				CustomerID:       p.Data.Attributes.Identifier,
 				SubscriptionID:   subID,

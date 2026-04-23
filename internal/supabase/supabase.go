@@ -253,6 +253,117 @@ func (c *Client) UpdateSubscriberTier(ctx context.Context, telegramUsername, tie
 	return nil
 }
 
+// billingSubscriberRow is a minimal row for Lemon/Stripe billing transfer.
+type billingSubscriberRow struct {
+	TelegramUsername     string `json:"telegram_username"`
+	Tier                 string `json:"tier"`
+	StripeCustomerID     string `json:"stripe_customer_id"`
+	StripeSubscriptionID string `json:"stripe_subscription_id"`
+	SubscriptionStatus   string `json:"subscription_status"`
+}
+
+// GetSubscriberBillingRow loads billing fields for a telegram_username (including email placeholders).
+func (c *Client) GetSubscriberBillingRow(ctx context.Context, telegramUsername string) (billingSubscriberRow, error) {
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=ilike.%s&select=telegram_username,tier,stripe_customer_id,stripe_subscription_id,subscription_status&limit=1",
+		c.baseURL, url.QueryEscape(strings.ToLower(telegramUsername)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return billingSubscriberRow{}, fmt.Errorf("supabase: build request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return billingSubscriberRow{}, fmt.Errorf("supabase: GetSubscriberBillingRow: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return billingSubscriberRow{}, fmt.Errorf("supabase: GetSubscriberBillingRow: status %d", resp.StatusCode)
+	}
+	var rows []billingSubscriberRow
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil || len(rows) == 0 {
+		return billingSubscriberRow{}, fmt.Errorf("supabase: subscriber not found")
+	}
+	return rows[0], nil
+}
+
+// UpsertBillingSubscriber inserts or merges a paid subscriber row (e.g. checkout before Telegram is linked).
+func (c *Client) UpsertBillingSubscriber(ctx context.Context, telegramUsername, tier, customerID, subscriptionID, status string) error {
+	body := map[string]any{
+		"telegram_username":       strings.ToLower(strings.TrimSpace(telegramUsername)),
+		"chat_id":                 0,
+		"symbols":                 []string{"BTC"},
+		"rules":                   json.RawMessage(`{}`),
+		"active":                  true,
+		"tier":                    tier,
+		"stripe_customer_id":      customerID,
+		"stripe_subscription_id":  subscriptionID,
+		"subscription_status":     status,
+	}
+	if tier == "pro" && status == "active" {
+		body["pro_since"] = time.Now().UTC().Format(time.RFC3339)
+	}
+	bodyBytes, _ := json.Marshal(body)
+	url := c.baseURL + "/rest/v1/subscribers?on_conflict=telegram_username"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("supabase: UpsertBillingSubscriber: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal,resolution=merge-duplicates")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: UpsertBillingSubscriber: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("supabase: UpsertBillingSubscriber: status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// SetSubscriberActive sets active flag for a subscriber by exact telegram_username.
+func (c *Client) SetSubscriberActive(ctx context.Context, telegramUsername string, active bool) error {
+	url := fmt.Sprintf("%s/rest/v1/subscribers?telegram_username=eq.%s", c.baseURL, url.QueryEscape(strings.ToLower(telegramUsername)))
+	body, _ := json.Marshal(map[string]any{"active": active})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("supabase: SetSubscriberActive: %w", err)
+	}
+	c.setHeaders(req)
+	req.Header.Set("Prefer", "return=minimal")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("supabase: SetSubscriberActive: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("supabase: SetSubscriberActive: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// MergeBillingFromPlaceholder copies tier and Lemon/Stripe IDs from an email-placeholder row to the real Telegram username, then deactivates the placeholder.
+func (c *Client) MergeBillingFromPlaceholder(ctx context.Context, placeholderUsername, realTelegramUsername string) error {
+	ph := strings.ToLower(strings.TrimSpace(placeholderUsername))
+	realU := strings.ToLower(strings.TrimSpace(realTelegramUsername))
+	if ph == "" || realU == "" || ph == realU {
+		return fmt.Errorf("supabase: invalid merge usernames")
+	}
+	row, err := c.GetSubscriberBillingRow(ctx, ph)
+	if err != nil {
+		return err
+	}
+	if row.Tier != "basic" && row.Tier != "pro" {
+		return fmt.Errorf("supabase: placeholder has no paid tier")
+	}
+	if err := c.UpdateSubscriberTier(ctx, realU, row.Tier, row.StripeCustomerID, row.StripeSubscriptionID, row.SubscriptionStatus); err != nil {
+		return err
+	}
+	return c.SetSubscriberActive(ctx, ph, false)
+}
+
 // UpdateSubscriberTierByStripeID updates tier/status for a subscriber found by stripe_customer_id or stripe_subscription_id.
 func (c *Client) UpdateSubscriberTierByStripeID(ctx context.Context, customerID, subscriptionID, tier, status string) error {
 	var reqURL string
