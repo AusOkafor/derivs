@@ -53,6 +53,13 @@ func (c *LemonSqueezyClient) CreateCheckout(telegramUsername, tier string) (stri
 		return "", fmt.Errorf("billing: variant not configured for tier %s", tier)
 	}
 
+	// Lemon Squeezy requires telegram_username to be a non-empty string in custom data.
+	// Webhook uses strings.TrimSpace; whitespace-only becomes empty and resolves from buyer email.
+	customTelegram := telegramUsername
+	if strings.TrimSpace(customTelegram) == "" {
+		customTelegram = " "
+	}
+
 	body := map[string]interface{}{
 		"data": map[string]interface{}{
 			"type": "checkouts",
@@ -62,7 +69,7 @@ func (c *LemonSqueezyClient) CreateCheckout(telegramUsername, tier string) (stri
 				},
 				"checkout_data": map[string]interface{}{
 					"custom": map[string]interface{}{
-						"telegram_username": telegramUsername,
+						"telegram_username": customTelegram,
 						"tier":               tier,
 					},
 				},
