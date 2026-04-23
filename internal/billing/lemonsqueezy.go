@@ -15,6 +15,10 @@ import (
 
 const lemonSqueezyAPI = "https://api.lemonsqueezy.com/v1"
 
+// Sent when checkout has no Telegram username yet. Lemon rejects empty/whitespace-only
+// custom fields for product-defined string keys; webhook treats this like unset and uses email.
+const noTelegramUsernameSentinel = "__derivlens_pending_telegram__"
+
 // LemonSqueezyClient wraps Lemon Squeezy API operations.
 type LemonSqueezyClient struct {
 	apiKey         string
@@ -53,44 +57,62 @@ func (c *LemonSqueezyClient) CreateCheckout(telegramUsername, tier string) (stri
 		return "", fmt.Errorf("billing: variant not configured for tier %s", tier)
 	}
 
-	// Lemon Squeezy requires telegram_username to be a non-empty string in custom data.
-	// Webhook uses strings.TrimSpace; whitespace-only becomes empty and resolves from buyer email.
-	customTelegram := telegramUsername
-	if strings.TrimSpace(customTelegram) == "" {
-		customTelegram = " "
+	customTelegram := strings.TrimPrefix(strings.TrimSpace(telegramUsername), "@")
+	if customTelegram == "" {
+		customTelegram = noTelegramUsernameSentinel
 	}
 
-	body := map[string]interface{}{
-		"data": map[string]interface{}{
-			"type": "checkouts",
-			"attributes": map[string]interface{}{
-				"product_options": map[string]interface{}{
-					"redirect_url": c.redirectURL + "/dashboard?upgraded=true",
-				},
-				"checkout_data": map[string]interface{}{
-					"custom": map[string]interface{}{
-						"telegram_username": customTelegram,
-						"tier":               tier,
-					},
-				},
-			},
-			"relationships": map[string]interface{}{
-				"store": map[string]interface{}{
-					"data": map[string]interface{}{
-						"type": "stores",
-						"id":   c.storeID,
-					},
-				},
-				"variant": map[string]interface{}{
-					"data": map[string]interface{}{
-						"type": "variants",
-						"id":   variantID,
-					},
-				},
-			},
-		},
+	// Typed payload so custom fields always encode as JSON strings (Lemon validates product custom keys).
+	type checkoutCustom struct {
+		TelegramUsername string `json:"telegram_username"`
+		Tier             string `json:"tier"`
 	}
-	jsonBody, _ := json.Marshal(body)
+	body := struct {
+		Data struct {
+			Type          string `json:"type"`
+			Attributes    struct {
+				ProductOptions struct {
+					RedirectURL string `json:"redirect_url"`
+				} `json:"product_options"`
+				CheckoutData struct {
+					Custom checkoutCustom `json:"custom"`
+				} `json:"checkout_data"`
+			} `json:"attributes"`
+			Relationships struct {
+				Store struct {
+					Data struct {
+						Type string `json:"type"`
+						ID   string `json:"id"`
+					} `json:"data"`
+				} `json:"store"`
+				Variant struct {
+					Data struct {
+						Type string `json:"type"`
+						ID   string `json:"id"`
+					} `json:"data"`
+				} `json:"variant"`
+			} `json:"relationships"`
+		} `json:"data"`
+	}{}
+	body.Data.Type = "checkouts"
+	body.Data.Attributes.ProductOptions.RedirectURL = c.redirectURL + "/dashboard?upgraded=true"
+	body.Data.Attributes.CheckoutData.Custom = checkoutCustom{
+		TelegramUsername: customTelegram,
+		Tier:             tier,
+	}
+	body.Data.Relationships.Store.Data = struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}{Type: "stores", ID: c.storeID}
+	body.Data.Relationships.Variant.Data = struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}{Type: "variants", ID: variantID}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("billing: CreateCheckout marshal: %w", err)
+	}
 
 	req, err := http.NewRequest(http.MethodPost, lemonSqueezyAPI+"/checkouts", bytes.NewReader(jsonBody))
 	if err != nil {
@@ -176,8 +198,12 @@ func (c *LemonSqueezyClient) HandleWebhook(payload []byte, sigHeader string, upd
 	}
 
 	// Extract custom data from meta.custom_data
-	username := p.Meta.CustomData.TelegramUsername
-	tier := p.Meta.CustomData.Tier
+	username := strings.TrimSpace(p.Meta.CustomData.TelegramUsername)
+	username = strings.TrimPrefix(username, "@")
+	if username == noTelegramUsernameSentinel {
+		username = ""
+	}
+	tier := strings.TrimSpace(p.Meta.CustomData.Tier)
 	if tier == "" {
 		tier = "pro"
 	}
