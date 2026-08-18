@@ -1909,6 +1909,23 @@ var allowedKlineIntervals = map[string]bool{
 	"1d": true, "1w": true,
 }
 
+// klinesCache dedupes concurrent frontend pollers behind a single upstream
+// Binance call per symbol/interval/limit. Without this, every open dashboard
+// tab hits Binance directly every 30s, which is how the backend's shared IP
+// got itself rate-limited (and eventually 418 auto-banned) by Binance.
+type klinesCacheEntry struct {
+	body       []byte
+	statusCode int
+	at         time.Time
+}
+
+var (
+	klinesCacheMu sync.Mutex
+	klinesCache   = map[string]klinesCacheEntry{}
+)
+
+const klinesCacheTTL = 20 * time.Second
+
 func (h *Handler) Klines(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1942,6 +1959,18 @@ func (h *Handler) Klines(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	limit := strconv.Itoa(limitN)
+	cacheKey := symbol + ":" + interval + ":" + limit
+
+	klinesCacheMu.Lock()
+	if entry, ok := klinesCache[cacheKey]; ok && time.Since(entry.at) < klinesCacheTTL {
+		klinesCacheMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=15")
+		w.WriteHeader(entry.statusCode)
+		w.Write(entry.body)
+		return
+	}
+	klinesCacheMu.Unlock()
 
 	url := fmt.Sprintf("https://api.binance.com/api/v3/klines?symbol=%sUSDT&interval=%s&limit=%s",
 		symbol, interval, limit)
@@ -1959,10 +1988,22 @@ func (h *Handler) Klines(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to read klines response"})
+		return
+	}
+
+	// Cache the response (including upstream errors like Binance's 429/418
+	// rate-limit responses) so a burst of pollers can't compound a ban.
+	klinesCacheMu.Lock()
+	klinesCache[cacheKey] = klinesCacheEntry{body: body, statusCode: resp.StatusCode, at: time.Now()}
+	klinesCacheMu.Unlock()
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=15")
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	w.Write(body)
 }
 
 // PostSimulatorScore handles POST /api/simulator/score
